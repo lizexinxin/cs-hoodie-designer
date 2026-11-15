@@ -209,6 +209,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { DecalGeometry } from 'three/addons/geometry/DecalGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 window.addEventListener('error', e => { document.title = 'ERR ' + e.message; });
 window.addEventListener('unhandledrejection', e => { document.title = 'REJ ' + (e.reason && (e.reason.message || e.reason)); });
 
@@ -310,7 +311,7 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 container.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
+const camera = new THREE.PerspectiveCamera(36, 1, 0.35, 32);
 
 /* 柔和棚拍环境光 + 主投影灯 */
 const pmrem = new THREE.PMREMGenerator(renderer);
@@ -327,7 +328,7 @@ key.shadow.bias = -0.0006;
 key.shadow.normalBias = 0.03;
 scene.add(key);
 const fill = new THREE.DirectionalLight(0xffffff, 0.32); fill.position.set(-3.2, 2, 1.5); scene.add(fill);
-const rim = new THREE.DirectionalLight(0xdfe8ff, 0.65); rim.position.set(0, 3, -4.5); scene.add(rim);
+const rim = new THREE.DirectionalLight(0xdfe8ff, 1.05); rim.position.set(0, 3, -4.5); scene.add(rim);
 
 const proceduralRoot = new THREE.Group();
 scene.add(proceduralRoot);
@@ -983,6 +984,18 @@ let decalMeshes = [];
 const decalTexCache = {};
 
 async function detectModelFile() {
+  try {
+    const r = await fetch('model/');
+    if (r.ok) {
+      const html = await r.text();
+      const links = [...html.matchAll(/href="([^"]+\.(?:glb|gltf))"/gi)];
+      for (const m of links) {
+        const f = 'model/' + decodeURIComponent(m[1]);
+        const head = await fetch(f, { method: 'HEAD' });
+        if (head.ok) return f;
+      }
+    }
+  } catch (e) { /* ignore */ }
   for (const f of ['model/hoodie.glb', 'model/hoodie.gltf', 'model/scene.gltf']) {
     try { const r = await fetch(f, { method: 'HEAD' }); if (r.ok) return f; } catch (e) { /* ignore */ }
   }
@@ -1018,6 +1031,45 @@ async function loadModelGarment(url) {
   });
   modelRoot.updateMatrixWorld(true);
   scene.add(modelRoot);
+  buildRadiusField();
+}
+let radiusField = null;
+function buildRadiusField() {
+  const box = new THREE.Box3().setFromObject(modelRoot);
+  const PB = 96, YB = 80;
+  const data = new Float32Array(PB * YB);
+  const v = new THREE.Vector3();
+  const H = Math.max(box.max.y - box.min.y, 1e-4);
+  for (const m of modelMeshes) {
+    if (/stitches/i.test(m.name || '')) continue;
+    m.updateMatrixWorld(true);
+    const pa = m.geometry.attributes.position;
+    for (let k = 0; k < pa.count; k++) {
+      v.fromBufferAttribute(pa, k).applyMatrix4(m.matrixWorld);
+      const r = Math.hypot(v.x, v.z);
+      if (r < 1e-4) continue;
+      let phi = Math.atan2(v.x, v.z); // -π..π
+      let pb = Math.floor((phi + Math.PI) / (Math.PI * 2) * PB) % PB;
+      let yb = Math.floor((v.y - box.min.y) / H * YB);
+      if (yb < 0) yb = 0; else if (yb >= YB) yb = YB - 1;
+      const idx = pb * YB + yb;
+      if (r > data[idx]) data[idx] = r;
+    }
+  }
+  radiusField = { PB, YB, minY: box.min.y, maxY: box.max.y, data };
+}
+function fieldRadius(phi, y) {
+  if (!radiusField) return 0;
+  const { PB, YB, minY, maxY, data } = radiusField;
+  const H = Math.max(maxY - minY, 1e-4);
+  const uf = ((phi % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) / (Math.PI * 2) * PB;
+  const vf = Math.min(Math.max((y - minY) / H, 0), 0.999) * YB;
+  const i0 = Math.floor(uf) % PB, i1 = (i0 + 1) % PB;
+  const j0 = Math.min(Math.floor(vf), YB - 1), j1 = Math.min(j0 + 1, YB - 1);
+  const fu = uf - Math.floor(uf), fv = vf - Math.floor(vf);
+  const a = data[i0 * YB + j0], b = data[i1 * YB + j0];
+  const c = data[i0 * YB + j1], d = data[i1 * YB + j1];
+  return a + (b - a) * fu + (c - a) * fv + (a - b - c + d) * fu * fv;
 }
 function hitMeshForPoint(p) {
   let best = null, bestD = Infinity;
@@ -1075,7 +1127,9 @@ function resolveDecalTexture(item) {
   decalTexCache[key] = tex;
   return tex;
 }
-function buildDecalMesh(item, order) {
+function buildDecalGeometry(item) {
+  // 曲面贴花：从模型轴心向贴花网格顶点逐点射线取真实表面半径，
+  // 生成贴合布面（含褶皱/落肩/袖子隆起）的曲面贴片，外浮 0.045
   const tex = resolveDecalTexture(item);
   const unit = modelHeight / 1500;
   let w, h;
@@ -1087,22 +1141,68 @@ function buildDecalMesh(item, order) {
     w = h * (tex.image.width || 1) / (tex.image.height || 1);
   }
   const p = new THREE.Vector3().fromArray(item.point);
-  const n = new THREE.Vector3().fromArray(item.normal);
-  const proj = new THREE.Object3D();
-  proj.position.copy(p);
-  proj.lookAt(p.clone().add(n));
-  proj.rotateZ((item.rot || 0) * Math.PI / 180);
-  const geo = new DecalGeometry(hitMeshForPoint(p), proj.position, proj.rotation, new THREE.Vector3(w, h, 0.45));
+  const nRaw = new THREE.Vector3().fromArray(item.normal);
+  const n = new THREE.Vector3(nRaw.x, 0, nRaw.z);
+  if (n.lengthSq() < 1e-6) n.set(0, 0, 1);
+  n.normalize();
+  const phiC = Math.atan2(n.x, n.z);
+  const rC = Math.max(Math.hypot(p.x, p.z), 0.15);
+  const yC = p.y;
+  const dPhi = w / rC;
+  const N = 8, M = 10, lift = 0.045;
+  // 顶点方向用"朝向贴花中心的水平方向"，保持贴片不随斜坡打转
+  // 顶点竖直成行：贴花不随布面斜坡打转，行半径由半径场贴合布面
+  const pos = [], uvs = [], idx = [];
+  for (let i = 0; i <= N; i++) {
+    const y = yC + h * (0.5 - i / N);
+    for (let j = 0; j <= M; j++) {
+      const phi = phiC + dPhi * (j / M - 0.5);
+      const dir = new THREE.Vector3(Math.sin(phi), 0, Math.cos(phi));
+      const rad = Math.max(fieldRadius(phi, y), rC) + lift;
+      pos.push(dir.x * rad, y, dir.z * rad);
+      uvs.push(j / M, 1 - i / N);
+    }
+  }
+  for (let i = 0; i < N; i++) for (let j = 0; j < M; j++) {
+    const a = i * (M + 1) + j, b = a + 1, c = a + M + 1, d = c + 1;
+    idx.push(a, d, b, a, c, d);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return { geo, tex, w, h };
+}
+function buildDecalMesh(item, order) {
+  const built = buildDecalGeometry(item);
+  if (!built) return null;
   const mat = new THREE.MeshPhysicalMaterial({
-    map: tex, transparent: true, depthWrite: false,
-    polygonOffset: true, polygonOffsetFactor: -(order + 1) * 6, polygonOffsetUnits: -(order + 1) * 6,
+    map: built.tex, transparent: true, depthWrite: false,
     roughness: 0.88, metalness: 0, envMapIntensity: 0.25,
   });
-  const mesh = new THREE.Mesh(geo, mat);
+  const mesh = new THREE.Mesh(built.geo, mat);
   mesh.renderOrder = 10 + order;
   mesh.userData.item = item;
   mesh.userData.zone = item.zone;
   return mesh;
+}
+function rebuildItemDecal(zoneKey, item) {
+  for (const m of [...decalMeshes]) {
+    if (m.userData.item === item) {
+      decalRoot.remove(m);
+      decalMeshes.splice(decalMeshes.indexOf(m), 1);
+      m.geometry.dispose();
+    }
+  }
+  item.zone = zoneKey;
+  const mesh = buildDecalMesh(item, state.zones[zoneKey].items.indexOf(item));
+  if (!mesh) return;
+  if (selected && selected.item === item && mesh.material.emissive) {
+    mesh.material.emissive = new THREE.Color('#123c66');
+  }
+  decalRoot.add(mesh);
+  decalMeshes.push(mesh);
 }
 function rebuildZoneDecals(zoneKey) {
   for (const m of [...decalMeshes]) {
@@ -1116,6 +1216,7 @@ function rebuildZoneDecals(zoneKey) {
     if (!it.point) return;
     it.zone = zoneKey;
     const mesh = buildDecalMesh(it, idx);
+    if (!mesh) return;
     if (selected && selected.item === it && mesh.material.emissive) {
       mesh.material.emissive = new THREE.Color('#123c66');
     }
@@ -1146,37 +1247,33 @@ function zoneByNormal(n) {
   if (n.x < -0.5) return 'sleeveL';
   return 'front';
 }
-function makeVirtualCamera(az) {
-  const cam = new THREE.PerspectiveCamera(camera.fov, camera.aspect, 0.1, 100);
-  cam.position.set(
-    3.7 * Math.sin(1.30) * Math.sin(az),
-    3.7 * Math.cos(1.30) - 0.05,
-    3.7 * Math.sin(1.30) * Math.cos(az));
-  cam.lookAt(0, -0.05, 0);
-  cam.updateProjectionMatrix();
-  cam.updateMatrixWorld(true);
-  return cam;
-}
 function placeItemsOnModel(zoneKey) {
-  const vcam = makeVirtualCamera(zoneKey === 'front' ? 0 : Math.PI);
+  if (!modelMeshes.length || !modelRoot) return;
+  const box = new THREE.Box3().setFromObject(modelRoot);
+  const size = box.getSize(new THREE.Vector3());
+  const back = zoneKey === 'back';
+  const zOut = back ? box.min.z - 1.2 : box.max.z + 1.2;
+  const dir = new THREE.Vector3(0, 0, back ? 1 : -1);
+  const isStitch = m => /stitches/i.test(m.name || '');
   for (const it of state.zones[zoneKey].items) {
-    const cx = (it.x / 1024 - 0.5) * 0.52;
-    const cy = 0.38 - (it.y / 1520) * 0.76;
-    // 未命中时做螺旋偏移重试，提高任意模型上的命中率
-    const offsets = [[0, 0]];
-    for (let r = 1; r <= 4; r++) for (let a = 0; a < 8; a++) {
-      offsets.push([cx + Math.cos(a * Math.PI / 4) * 0.055 * r, cy + Math.sin(a * Math.PI / 4) * 0.055 * r]);
-    }
-    for (const [ox, oy] of offsets) {
-      raycaster.setFromCamera(new THREE.Vector2(ox, oy), vcam);
-      const hits = raycaster.intersectObjects(modelMeshes, false);
-      if (hits.length) {
-        const h = hits[0];
-        const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
-        it.point = h.point.toArray();
-        it.normal = n.toArray();
-        break;
-      }
+    const u = it.x / 1024;   // 0..1 左→右
+    const v = it.y / 1520;   // 0..1 上→下
+    const fx = back ? 1 - u : u;
+    const x = (fx - 0.5) * size.x * 0.78;
+    const y = box.max.y - size.y * (0.36 + v * 0.50);
+    raycaster.set(new THREE.Vector3(x, y, zOut), dir);
+    const hits = raycaster.intersectObjects(modelMeshes, false)
+      .filter(h => !isStitch(h.object));
+    // 优先取"朝向本面且不太朝上"的命中（跳过兜帽顶等），没有则用第一个
+    let h = hits.find(h => {
+      if (!h.face) return true;
+      const wn = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+      return back ? (wn.z < -0.25 && wn.y < 0.45) : (wn.z > 0.25 && wn.y < 0.45);
+    }) || hits[0];
+    if (h) {
+      const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : dir.clone().negate();
+      it.point = h.point.toArray();
+      it.normal = n.toArray();
     }
   }
 }
@@ -1240,7 +1337,7 @@ renderer.domElement.addEventListener('pointermove', e => {
       if (hit && hit.kind === 'surface') {
         drag.item.point = hit.point.toArray();
         drag.item.normal = hit.normal.toArray();
-        rebuildZoneDecals(drag.zoneKey);
+        rebuildItemDecal(drag.zoneKey, drag.item);
         scheduleSave();
       }
       return;
@@ -1606,7 +1703,11 @@ function applyPreset(p) {
   const out = PRESETS[p]();
   if (MODE === 'model') {
     for (const zk of ['front', 'back']) {
-      state.zones[zk].items = out[zk] || [];
+      state.zones[zk].items = (out[zk] || []).map(it => ({
+        ...it,
+        scale: (it.scale || 1) * 0.62,
+        size: it.size ? it.size * 0.62 : undefined,
+      }));
       placeItemsOnModel(zk);
     }
     for (const k in state.zones) rebuildZoneDecals(k);

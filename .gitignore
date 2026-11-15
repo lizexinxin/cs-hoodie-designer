@@ -1,2 +1,9 @@
 .idea/
 .DS_Store
+model/*.glb
+model/*.gltf
+model/*.bin
+model/*.png
+model/*.jpg
+model/*.jpeg
+model/*.ktx2
