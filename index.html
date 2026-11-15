@@ -206,6 +206,11 @@
 <script type="module">
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { DecalGeometry } from 'three/addons/geometry/DecalGeometry.js';
+window.addEventListener('error', e => { document.title = 'ERR ' + e.message; });
+window.addEventListener('unhandledrejection', e => { document.title = 'REJ ' + (e.reason && (e.reason.message || e.reason)); });
 
 /* =========================================================
    数据：10 支战队（简化队徽 = 配色 + 形状 + 缩写，可上传官方图替换）
@@ -324,6 +329,9 @@ scene.add(key);
 const fill = new THREE.DirectionalLight(0xffffff, 0.32); fill.position.set(-3.2, 2, 1.5); scene.add(fill);
 const rim = new THREE.DirectionalLight(0xdfe8ff, 0.65); rim.position.set(0, 3, -4.5); scene.add(rim);
 
+const proceduralRoot = new THREE.Group();
+scene.add(proceduralRoot);
+
 /* 地面（接影） */
 {
   const ground = new THREE.Mesh(
@@ -430,7 +438,14 @@ function applyFabricColor() {
     if (m.userData.darken) c.lerp(new THREE.Color('#000000'), m.userData.darken);
     m.color.copy(c);
   }
-  redrawAllZones();
+  if (MODE === 'model') {
+    for (const m of modelMeshes) {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      for (const mm of mats) mm.color?.set(base);
+    }
+    for (const k in decalTexCache) delete decalTexCache[k];
+    refreshAllZones();
+  } else refreshAllZones();
 }
 
 /* =========================================================
@@ -547,7 +562,7 @@ function buildZone(key, { W, H, base, rings }) {
   const mesh = new THREE.Mesh(loftGeometry(rings, false), zoneMaterial(tex));
   mesh.receiveShadow = true;
   mesh.userData.zoneKey = key;
-  scene.add(mesh);
+  proceduralRoot.add(mesh);
   zoneMeshes[key] = { mesh, canvas, ctx: canvas.getContext('2d'), tex, cfg: { W, H, base } };
 }
 
@@ -568,7 +583,7 @@ function buildZone(key, { W, H, base, rings }) {
   }
   const torso = new THREE.Mesh(loftGeometry(rings, true), fabricMat(0, repTex(knitC, 12, 9)));
   torso.castShadow = true; torso.receiveShadow = true;
-  scene.add(torso);
+  proceduralRoot.add(torso);
 }
 /* 下摆罗纹（跟随衣身褶皱） */
 {
@@ -587,7 +602,7 @@ function buildZone(key, { W, H, base, rings }) {
   }
   const hem = new THREE.Mesh(loftGeometry(rings, true), fabricMat(0.05, repTex(ribC, 46, 2), 1.4));
   hem.castShadow = true; hem.receiveShadow = true;
-  scene.add(hem);
+  proceduralRoot.add(hem);
 }
 /* 兜帽：立起的"帽筒"——倾斜部分圆环（隧道开口朝前下）+ 暗色内衬 + 圆头收边 */
 {
@@ -623,14 +638,14 @@ function buildZone(key, { W, H, base, rings }) {
   hoodGrp.position.set(0, 0.60, -0.05);
   hoodGrp.scale.set(1.15, 1.0, 1.25);
   hoodGrp.traverse(o => { if (o.isMesh) o.castShadow = true; });
-  scene.add(hoodGrp);
+  proceduralRoot.add(hoodGrp);
   // 帽筒内腔壁（挡住隧道透视，形成暗色帽内空间）
   const cavity = new THREE.Mesh(
     new THREE.SphereGeometry(0.150, 24, 16),
     new THREE.MeshStandardMaterial({ color: '#0c0d10', roughness: 0.98 }));
   cavity.position.set(0, 0.630, -0.10);
   cavity.scale.set(1.20, 1.10, 1.20);
-  scene.add(cavity);
+  proceduralRoot.add(cavity);
   window.__hoodGroup = hoodGrp; // 调试
 }
 /* 领口开口 */
@@ -639,7 +654,7 @@ function buildZone(key, { W, H, base, rings }) {
     new THREE.MeshBasicMaterial({ color: '#0a0b0e' }));
   neck.rotation.x = -Math.PI / 2 + 0.35;
   neck.position.set(0, 0.648, 0.02);
-  scene.add(neck);
+  proceduralRoot.add(neck);
 }
 /* 领口罗纹圈 */
 {
@@ -650,7 +665,7 @@ function buildZone(key, { W, H, base, rings }) {
   rib.rotation.x = Math.PI / 2 - 0.15;
   rib.scale.set(1.18, 1, 0.92);
   rib.castShadow = true; rib.receiveShadow = true;
-  scene.add(rib);
+  proceduralRoot.add(rib);
 }
 /* 帽绳 + 金属绳头 + 气眼 */
 for (const sx of [-1, 1]) {
@@ -664,17 +679,17 @@ for (const sx of [-1, 1]) {
     new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 20, 0.0115, 8),
     new THREE.MeshStandardMaterial({ color: '#dad6cc', roughness: .85 }));
   rope.castShadow = true;
-  scene.add(rope);
+  proceduralRoot.add(rope);
   const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.0135, 0.0135, 0.05, 10),
     new THREE.MeshStandardMaterial({ color: '#8f8c85', roughness: .35, metalness: .8 }));
   tip.position.copy(pts[3]);
   tip.rotation.x = 0.12;
-  scene.add(tip);
+  proceduralRoot.add(tip);
   const eye = new THREE.Mesh(new THREE.TorusGeometry(0.017, 0.0055, 8, 20),
     new THREE.MeshStandardMaterial({ color: '#1c1d22', roughness: .4, metalness: .3 }));
   eye.position.set(0.095 * sx, 0.562, 0.260);
   eye.rotation.x = -0.12;
-  scene.add(eye);
+  proceduralRoot.add(eye);
 }
 
 /* 正 / 背印花区：沿版型截面外扩 0.007，严丝合缝 */
@@ -737,7 +752,7 @@ function buildSleeve(side) {
   }
   const arm = new THREE.Mesh(loftGeometry(rings, true), fabricMat(0, repTex(knitC, 12, 9)));
   arm.castShadow = true; arm.receiveShadow = true;
-  scene.add(arm);
+  proceduralRoot.add(arm);
   // 罗纹袖口
   const cr = [];
   for (let i = 0; i < 4; i++) {
@@ -752,7 +767,7 @@ function buildSleeve(side) {
   }
   const cuff = new THREE.Mesh(loftGeometry(cr, true), fabricMat(0.14, repTex(ribC, 26, 1.6), 1.4));
   cuff.castShadow = true; cuff.receiveShadow = true;
-  scene.add(cuff);
+  proceduralRoot.add(cuff);
   // 外侧印花条带（行序：袖口侧→肩侧；θ 排序保证外侧看文字正向）
   const zrings = [];
   for (let i = 0; i < 8; i++) {
@@ -773,7 +788,7 @@ function buildSleeve(side) {
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   const zmesh = new THREE.Mesh(loftGeometry(zrings, false), zoneMaterial(tex));
   zmesh.userData.zoneKey = zkey;
-  scene.add(zmesh);
+  proceduralRoot.add(zmesh);
   zoneMeshes[zkey] = { mesh: zmesh, canvas, ctx: canvas.getContext('2d'), tex, cfg: { W: 800, H: 1080, base: 160 } };
 }
 buildSleeve(-1); // 左袖（-x）
@@ -851,6 +866,14 @@ function redrawZone(key) {
 }
 function redrawAllZones() {
   for (const k in zoneMeshes) redrawZone(k);
+}
+function refreshZone(zoneKey) {
+  if (MODE === 'model') rebuildZoneDecals(zoneKey);
+  else redrawZone(zoneKey);
+}
+function refreshAllZones() {
+  if (MODE === 'model') { for (const k in state.zones) rebuildZoneDecals(k); }
+  else redrawAllZones();
 }
 
 /* 袋鼠兜（参考图样式：斜开口 + 袋口下垂 + 开口进深阴影） */
@@ -946,6 +969,218 @@ function hitItem(zoneKey, px, py) {
   return null;
 }
 
+/* =========================================================
+   模型模式：model/ 目录下的 GLB/GLTF + DecalGeometry 贴花
+========================================================= */
+let MODE = 'procedural';
+let modelRoot = null;
+let modelMeshes = [];
+let modelHeight = 1.76;
+const decalRoot = new THREE.Group();
+decalRoot.visible = false;
+scene.add(decalRoot);
+let decalMeshes = [];
+const decalTexCache = {};
+
+async function detectModelFile() {
+  for (const f of ['model/hoodie.glb', 'model/hoodie.gltf', 'model/scene.gltf']) {
+    try { const r = await fetch(f, { method: 'HEAD' }); if (r.ok) return f; } catch (e) { /* ignore */ }
+  }
+  return null;
+}
+async function loadModelGarment(url) {
+  const loader = new GLTFLoader();
+  const draco = new DRACOLoader();
+  draco.setDecoderPath('./vendor/addons/libs/draco/gltf/');
+  loader.setDRACOLoader(draco);
+  const gltf = await new Promise((res, rej) => loader.load(url, res, undefined, rej));
+  modelRoot = gltf.scene;
+  const box = new THREE.Box3().setFromObject(modelRoot);
+  const size = box.getSize(new THREE.Vector3());
+  modelHeight = size.y;
+  const sc = 1.76 / Math.max(size.y, 0.001);
+  modelRoot.scale.setScalar(sc);
+  const c = box.getCenter(new THREE.Vector3());
+  modelRoot.position.set(-c.x * sc, -0.92 - box.min.y * sc, -c.z * sc);
+  modelRoot.traverse(o => {
+    if (o.isMesh) {
+      o.castShadow = true; o.receiveShadow = true;
+      modelMeshes.push(o);
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        if (!m) continue;
+        if ('roughness' in m) m.roughness = Math.max(0.85, m.roughness ?? 0.9);
+        if ('envMapIntensity' in m) m.envMapIntensity = 0.55;
+        if ('metalness' in m) m.metalness = Math.min(m.metalness ?? 0, 0.1);
+        m.side = THREE.DoubleSide;
+      }
+    }
+  });
+  modelRoot.updateMatrixWorld(true);
+  scene.add(modelRoot);
+}
+function hitMeshForPoint(p) {
+  let best = null, bestD = Infinity;
+  const bb = new THREE.Box3(), tc = new THREE.Vector3();
+  for (const m of modelMeshes) {
+    if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+    bb.copy(m.geometry.boundingBox).applyMatrix4(m.matrixWorld);
+    bb.expandByScalar(0.06);
+    if (bb.containsPoint(p)) {
+      bb.getCenter(tc);
+      const d = tc.distanceToSquared(p);
+      if (d < bestD) { bestD = d; best = m; }
+    }
+  }
+  return best || modelMeshes[0];
+}
+function resolveDecalTexture(item) {
+  if (item.type === 'logo') {
+    const key = 'logo:' + item.teamId + (item.flip ? ':F' : '');
+    if (decalTexCache[key]) return decalTexCache[key];
+    const img = resolveImg(item.teamId);
+    const c = document.createElement('canvas');
+    c.width = img.width || 256; c.height = img.height || 256;
+    const g = c.getContext('2d');
+    if (item.flip) { g.translate(c.width, 0); g.scale(-1, 1); }
+    g.drawImage(img, 0, 0);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    decalTexCache[key] = tex;
+    return tex;
+  }
+  const key = 'text:' + item.text + '|' + item.color + '|' + Math.round(item.size) + '|' +
+    (item.stroke ? 1 : 0) + '|' + contrastFor(state.color);
+  if (decalTexCache[key]) return decalTexCache[key];
+  const meas = document.createElement('canvas').getContext('2d');
+  const fs = 128;
+  meas.font = `900 ${fs}px "Arial Black", Impact, "PingFang SC", sans-serif`;
+  const c = document.createElement('canvas');
+  c.width = Math.max(Math.ceil(meas.measureText(item.text).width) + 60, 64);
+  c.height = Math.ceil(fs * 1.45);
+  const g = c.getContext('2d');
+  g.font = `900 ${fs}px "Arial Black", Impact, "PingFang SC", sans-serif`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  if (item.stroke) {
+    g.lineWidth = fs * 0.10; g.lineJoin = 'round';
+    g.strokeStyle = contrastFor(state.color);
+    g.strokeText(item.text, c.width / 2, c.height / 2);
+  }
+  g.fillStyle = item.color === 'auto' ? contrastFor(state.color) : item.color;
+  g.fillText(item.text, c.width / 2, c.height / 2);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  decalTexCache[key] = tex;
+  return tex;
+}
+function buildDecalMesh(item, order) {
+  const tex = resolveDecalTexture(item);
+  const unit = modelHeight / 1500;
+  let w, h;
+  if (item.type === 'logo') {
+    w = 210 * item.scale * unit;
+    h = w * (tex.image.height || 1) / (tex.image.width || 1);
+  } else {
+    h = item.size * item.scale * unit;
+    w = h * (tex.image.width || 1) / (tex.image.height || 1);
+  }
+  const p = new THREE.Vector3().fromArray(item.point);
+  const n = new THREE.Vector3().fromArray(item.normal);
+  const proj = new THREE.Object3D();
+  proj.position.copy(p);
+  proj.lookAt(p.clone().add(n));
+  proj.rotateZ((item.rot || 0) * Math.PI / 180);
+  const geo = new DecalGeometry(hitMeshForPoint(p), proj.position, proj.rotation, new THREE.Vector3(w, h, 0.45));
+  const mat = new THREE.MeshPhysicalMaterial({
+    map: tex, transparent: true, depthWrite: false,
+    polygonOffset: true, polygonOffsetFactor: -(order + 1) * 6, polygonOffsetUnits: -(order + 1) * 6,
+    roughness: 0.88, metalness: 0, envMapIntensity: 0.25,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.renderOrder = 10 + order;
+  mesh.userData.item = item;
+  mesh.userData.zone = item.zone;
+  return mesh;
+}
+function rebuildZoneDecals(zoneKey) {
+  for (const m of [...decalMeshes]) {
+    if (m.userData.zone === zoneKey) {
+      decalRoot.remove(m);
+      decalMeshes.splice(decalMeshes.indexOf(m), 1);
+      m.geometry.dispose();
+    }
+  }
+  state.zones[zoneKey].items.forEach((it, idx) => {
+    if (!it.point) return;
+    it.zone = zoneKey;
+    const mesh = buildDecalMesh(it, idx);
+    if (selected && selected.item === it && mesh.material.emissive) {
+      mesh.material.emissive = new THREE.Color('#123c66');
+    }
+    decalRoot.add(mesh);
+    decalMeshes.push(mesh);
+  });
+  decalRoot.visible = decalMeshes.length > 0;
+}
+function pickModel(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNDC, camera);
+  const d = raycaster.intersectObjects(decalMeshes, false);
+  if (d.length) return { kind: 'decal', item: d[0].object.userData.item };
+  const m = raycaster.intersectObjects(modelMeshes, false);
+  if (m.length) {
+    const h = m[0];
+    const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
+    return { kind: 'surface', point: h.point.clone(), normal: n };
+  }
+  return null;
+}
+function zoneByNormal(n) {
+  if (n.z > 0.45) return 'front';
+  if (n.z < -0.45) return 'back';
+  if (n.x > 0.5) return 'sleeveR';
+  if (n.x < -0.5) return 'sleeveL';
+  return 'front';
+}
+function makeVirtualCamera(az) {
+  const cam = new THREE.PerspectiveCamera(camera.fov, camera.aspect, 0.1, 100);
+  cam.position.set(
+    3.7 * Math.sin(1.30) * Math.sin(az),
+    3.7 * Math.cos(1.30) - 0.05,
+    3.7 * Math.sin(1.30) * Math.cos(az));
+  cam.lookAt(0, -0.05, 0);
+  cam.updateProjectionMatrix();
+  cam.updateMatrixWorld(true);
+  return cam;
+}
+function placeItemsOnModel(zoneKey) {
+  const vcam = makeVirtualCamera(zoneKey === 'front' ? 0 : Math.PI);
+  for (const it of state.zones[zoneKey].items) {
+    const cx = (it.x / 1024 - 0.5) * 0.52;
+    const cy = 0.38 - (it.y / 1520) * 0.76;
+    // 未命中时做螺旋偏移重试，提高任意模型上的命中率
+    const offsets = [[0, 0]];
+    for (let r = 1; r <= 4; r++) for (let a = 0; a < 8; a++) {
+      offsets.push([cx + Math.cos(a * Math.PI / 4) * 0.055 * r, cy + Math.sin(a * Math.PI / 4) * 0.055 * r]);
+    }
+    for (const [ox, oy] of offsets) {
+      raycaster.setFromCamera(new THREE.Vector2(ox, oy), vcam);
+      const hits = raycaster.intersectObjects(modelMeshes, false);
+      if (hits.length) {
+        const h = hits[0];
+        const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
+        it.point = h.point.toArray();
+        it.normal = n.toArray();
+        break;
+      }
+    }
+  }
+}
+
 let drag = null;    // {zone, item, dx, dy}
 let rotating = false;
 let pinch = null;
@@ -960,16 +1195,31 @@ renderer.domElement.addEventListener('pointerdown', e => {
     drag = null; rotating = false;
     return;
   }
-  const hit = pickZone(e.clientX, e.clientY);
-  if (hit) {
-    const item = hitItem(hit.key, hit.px, hit.py);
-    if (item) {
+  if (MODE === 'model') {
+    const hit = pickModel(e.clientX, e.clientY);
+    if (hit && hit.kind === 'decal') {
       setPlacing(null);
-      select(hit.key, item);
-      drag = { item, zoneKey: hit.key, dx: hit.px - item.x, dy: hit.py - item.y };
+      select(hit.item.zone, hit.item);
+      drag = { item: hit.item, zoneKey: hit.item.zone, mode: 'model' };
       return;
     }
-    if (placingTeam) { placeLogo(placingTeam, hit.key, hit.px, hit.py); return; }
+    if (placingTeam) {
+      if (hit && hit.kind === 'surface') placeOnModel(placingTeam, hit);
+      else toast('点在模型外面了，往卫衣上点');
+      return;
+    }
+  } else {
+    const hit = pickZone(e.clientX, e.clientY);
+    if (hit) {
+      const item = hitItem(hit.key, hit.px, hit.py);
+      if (item) {
+        setPlacing(null);
+        select(hit.key, item);
+        drag = { item, zoneKey: hit.key, dx: hit.px - item.x, dy: hit.py - item.y };
+        return;
+      }
+      if (placingTeam) { placeLogo(placingTeam, hit.key, hit.px, hit.py); return; }
+    }
   }
   select(null);
   rotating = true;
@@ -985,13 +1235,23 @@ renderer.domElement.addEventListener('pointermove', e => {
     return;
   }
   if (drag) {
+    if (drag.mode === 'model') {
+      const hit = pickModel(e.clientX, e.clientY);
+      if (hit && hit.kind === 'surface') {
+        drag.item.point = hit.point.toArray();
+        drag.item.normal = hit.normal.toArray();
+        rebuildZoneDecals(drag.zoneKey);
+        scheduleSave();
+      }
+      return;
+    }
     const hit = pickZone(e.clientX, e.clientY);
     if (hit) {
-      if (drag.zoneKey !== hit.key) redrawZone(drag.zoneKey);
+      if (drag.zoneKey !== hit.key) refreshZone(drag.zoneKey);
       drag.zoneKey = hit.key;
       drag.item.x = hit.px - drag.dx;
       drag.item.y = hit.py - drag.dy;
-      redrawZone(hit.key);
+      refreshZone(hit.key);
       scheduleSave();
     }
     return;
@@ -1022,8 +1282,8 @@ renderer.domElement.addEventListener('wheel', e => {
 function select(zoneKey, item) {
   const prev = selected;
   selected = item ? { zone: zoneKey, item } : null;
-  if (prev) redrawZone(prev.zone);
-  if (selected) redrawZone(selected.zone);
+  if (prev) refreshZone(prev.zone);
+  if (selected) refreshZone(selected.zone);
   syncSelPanel();
 }
 function placeLogo(teamId, zoneKey, px, py) {
@@ -1031,7 +1291,18 @@ function placeLogo(teamId, zoneKey, px, py) {
   state.zones[zoneKey].items.push(item);
   setPlacing(null);
   select(zoneKey, item);
-  redrawZone(zoneKey);
+  refreshZone(zoneKey);
+  scheduleSave();
+  toast(`已放置 ${teamById(teamId).name}，拖动可调整位置`);
+}
+function placeOnModel(teamId, hit) {
+  const zoneKey = zoneByNormal(hit.normal);
+  const item = { type: 'logo', teamId, scale: 1, rot: 0, flip: false,
+    point: hit.point.toArray(), normal: hit.normal.toArray() };
+  state.zones[zoneKey].items.push(item);
+  setPlacing(null);
+  select(zoneKey, item);
+  rebuildZoneDecals(zoneKey);
   scheduleSave();
   toast(`已放置 ${teamById(teamId).name}，拖动可调整位置`);
 }
@@ -1077,32 +1348,32 @@ function syncSelPanel() {
 $('#selScale').addEventListener('input', e => {
   if (!selected) return;
   selected.item.scale = e.target.value / 100;
-  redrawZone(selected.zone); scheduleSave();
+  refreshZone(selected.zone); scheduleSave();
 });
 $('#selRot').addEventListener('input', e => {
   if (!selected) return;
   selected.item.rot = +e.target.value;
-  redrawZone(selected.zone); scheduleSave();
+  refreshZone(selected.zone); scheduleSave();
 });
 $('#selText').addEventListener('input', e => {
   if (!selected || selected.item.type !== 'text') return;
   selected.item.text = e.target.value || ' ';
-  redrawZone(selected.zone); scheduleSave();
+  refreshZone(selected.zone); scheduleSave();
 });
 $('#selColor').addEventListener('input', e => {
   if (!selected || selected.item.type !== 'text') return;
   selected.item.color = e.target.value;
-  redrawZone(selected.zone); scheduleSave();
+  refreshZone(selected.zone); scheduleSave();
 });
 $('#selStroke').addEventListener('change', e => {
   if (!selected || selected.item.type !== 'text') return;
   selected.item.stroke = e.target.checked;
-  redrawZone(selected.zone); scheduleSave();
+  refreshZone(selected.zone); scheduleSave();
 });
 $('#selFlip').addEventListener('change', e => {
   if (!selected || selected.item.type !== 'logo') return;
   selected.item.flip = e.target.checked;
-  redrawZone(selected.zone); scheduleSave();
+  refreshZone(selected.zone); scheduleSave();
 });
 $('#btnDel').addEventListener('click', deleteSelected);
 $('#btnTop').addEventListener('click', () => reorder(1e9));
@@ -1114,7 +1385,7 @@ function reorder(delta) {
   const i = arr.indexOf(selected.item);
   const j = THREE.MathUtils.clamp(delta === 1e9 ? arr.length - 1 : i + delta, 0, arr.length - 1);
   arr.splice(j, 0, arr.splice(i, 1)[0]);
-  redrawZone(selected.zone); scheduleSave();
+  refreshZone(selected.zone); scheduleSave();
 }
 function deleteSelected() {
   if (!selected) return;
@@ -1122,7 +1393,7 @@ function deleteSelected() {
   const arr = state.zones[zone].items;
   arr.splice(arr.indexOf(item), 1);
   select(null);
-  redrawZone(zone); scheduleSave();
+  refreshZone(zone); scheduleSave();
 }
 
 document.addEventListener('keydown', e => {
@@ -1206,7 +1477,8 @@ function readFileToUpload(f, teamId, cb) {
     const img = new Image();
     img.onload = () => {
       uploads[teamId] = { data: r.result, img };
-      redrawAllZones(); refreshThumbs(); scheduleSave();
+      for (const k in decalTexCache) if (k.startsWith('logo:' + teamId)) delete decalTexCache[k];
+      refreshAllZones(); refreshThumbs(); scheduleSave();
       toast(`已替换 ${teamById(teamId).name} 的队徽图`);
       cb && cb();
     };
@@ -1227,11 +1499,25 @@ window.addEventListener('drop', e => {
 /* 自定义文字 */
 function addText(zoneKey) {
   const str = $('#customText').value.trim() || 'CS2';
+  if (MODE === 'model') {
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const hits = raycaster.intersectObjects(modelMeshes, false);
+    if (!hits.length) { toast('当前视角没对准卫衣，转一下视角再试'); return; }
+    const h = hits[0];
+    const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
+    const zk = zoneByNormal(n);
+    const item = { type: 'text', text: str, size: 130, scale: 1, rot: 0, color: 'auto', stroke: false,
+      point: h.point.toArray(), normal: n.toArray() };
+    state.zones[zk].items.push(item);
+    select(zk, item);
+    scheduleSave();
+    return;
+  }
   const z = zoneMeshes[zoneKey].cfg;
   const item = { type: 'text', text: str, size: zoneKey.startsWith('sleeve') ? 110 : 130, scale: 1, rot: 0, color: 'auto', stroke: false, x: z.W / 2, y: z.H / 2 };
   state.zones[zoneKey].items.push(item);
   select(zoneKey, item);
-  redrawZone(zoneKey); scheduleSave();
+  refreshZone(zoneKey); scheduleSave();
 }
 $('#btnTextFront').addEventListener('click', () => addText('front'));
 $('#btnTextBack').addEventListener('click', () => addText('back'));
@@ -1243,7 +1529,7 @@ $('#btnClearZones').addEventListener('click', () => {
   if (!confirm('清空所有印花（徽章和文字）？')) return;
   for (const k in state.zones) state.zones[k].items = [];
   select(null);
-  redrawAllZones(); scheduleSave();
+  refreshAllZones(); scheduleSave();
 });
 
 /* ---------- 排版预设 ---------- */
@@ -1318,12 +1604,20 @@ const PRESETS = {
 };
 function applyPreset(p) {
   const out = PRESETS[p]();
-  for (const k in out) {
-    state.zones[k].items = out[k];
-    if (out[k].length) redrawZone(k);
+  if (MODE === 'model') {
+    for (const zk of ['front', 'back']) {
+      state.zones[zk].items = out[zk] || [];
+      placeItemsOnModel(zk);
+    }
+    for (const k in state.zones) rebuildZoneDecals(k);
+  } else {
+    for (const k in out) {
+      state.zones[k].items = out[k];
+      if (out[k].length) refreshZone(k);
+    }
+    // 未涉及的区域重绘（可能被旧选择影响）
+    refreshAllZones();
   }
-  // 未涉及的区域重绘（可能被旧选择影响）
-  redrawAllZones();
   select(null);
   scheduleSave();
   const names = { A: '前胸荣誉墙', B: '背面环绕', C: '前小后大', D: '斜向色带' };
@@ -1344,7 +1638,7 @@ $('#autoRot').addEventListener('change', e => autoRotate = e.target.checked);
 /* ---------- 导出 PNG ---------- */
 function exportView(az) {
   exporting = true;
-  if (selected) redrawZone(selected.zone);
+  if (selected) refreshZone(selected.zone);
   const cw = container.clientWidth, ch = container.clientHeight;
   const pr = renderer.getPixelRatio();
   renderer.setPixelRatio(1);
@@ -1366,7 +1660,7 @@ function exportView(az) {
   camera.aspect = cw / ch;
   camera.updateProjectionMatrix();
   exporting = false;
-  if (selected) redrawZone(selected.zone);
+  if (selected) refreshZone(selected.zone);
   toast('已导出高清 PNG（1400×1750）');
 }
 $('#btnExpF').addEventListener('click', () => exportView(0));
@@ -1388,7 +1682,7 @@ function save() {
     const up = {};
     for (const k in uploads) up[k] = uploads[k].data;
     localStorage.setItem(SAVE_KEY, JSON.stringify({
-      v: 1, color: state.color, zones: state.zones, uploads: up,
+      v: 2, mode: MODE, color: state.color, zones: state.zones, uploads: up,
     }));
   } catch (e) {
     if (e.name === 'QuotaExceededError') toast('本地存档空间不足（图片太大），设计仍可用但不会自动保存');
@@ -1397,11 +1691,20 @@ function save() {
 function load() {
   let data = null;
   try { data = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) { /* ignore */ }
-  if (data && data.v === 1) {
+  if (data && data.mode === 'model' && MODE !== 'model') {
+    toast('本地存档来自真实模型模式，把 GLB 放进 model/ 文件夹后可恢复');
+    return false;
+  }
+  if (data && data.mode === 'procedural' && MODE === 'model') {
+    toast('本地存档来自程序化模式，模型模式下请重新排版');
+    return false;
+  }
+  if (data && (data.v === 1 || data.v === 2)) {
     state.color = data.color || state.color;
     for (const k in state.zones) {
       state.zones[k].items = (data.zones?.[k]?.items || []).filter(it =>
-        it && (it.type === 'text' ? it.text : it.teamId));
+        it && (it.type === 'text' ? it.text : it.teamId) &&
+        (MODE !== 'model' || it.point));
     }
     const ups = data.uploads || {};
     const ids = Object.keys(ups);
@@ -1444,19 +1747,40 @@ new ResizeObserver(resize).observe(container);
 resize();
 
 /* 初始化 */
-const hadSave = load();
-setColor(state.color);
-refreshThumbs();
-if (!hadSave) {
-  applyPreset('A');
-  state.zones.back.items = PRESETS.B().back;
-  redrawAllZones();
-  scheduleSave();
+async function initApp() {
+  try {
+  const modelUrl = await detectModelFile();
+  if (modelUrl) {
+    MODE = 'model';
+    await loadModelGarment(modelUrl);
+    toast('已加载真实模型（贴花模式）');
+  }
+  const hadSave = load();
+  setColor(state.color);
+  refreshThumbs();
+  if (!hadSave) {
+    applyPreset('A');
+    state.zones.back.items = PRESETS.B().back;
+    if (MODE === 'model') placeItemsOnModel('back');
+    refreshAllZones();
+    scheduleSave();
+  }
+  updateCamera();
+  } catch (e) {
+    document.title = 'INIT ERR ' + (e && (e.message || e));
+    console.error(e);
+  }
 }
-updateCamera();
+initApp();
 
 /* 调试口（供自动化测试检查场景） */
-window.__dbg = { scene, zoneMeshes, state, camera, orbit };
+window.__dbg = {
+  scene, zoneMeshes, state, camera, orbit,
+  get MODE() { return MODE; },
+  get modelMeshes() { return modelMeshes; },
+  get decalMeshes() { return decalMeshes; },
+  modelRoot: () => modelRoot,
+};
 
 let lastT = performance.now();
 function animate(now) {
