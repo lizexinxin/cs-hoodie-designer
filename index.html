@@ -299,7 +299,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserv
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.06;
+renderer.toneMappingExposure = 1.02;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 container.appendChild(renderer.domElement);
@@ -311,7 +311,7 @@ const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
-const key = new THREE.DirectionalLight(0xffffff, 1.35);
+const key = new THREE.DirectionalLight(0xffffff, 1.22);
 key.position.set(2.6, 4.6, 3.4);
 key.castShadow = true;
 key.shadow.mapSize.set(2048, 2048);
@@ -324,15 +324,42 @@ scene.add(key);
 const fill = new THREE.DirectionalLight(0xffffff, 0.32); fill.position.set(-3.2, 2, 1.5); scene.add(fill);
 const rim = new THREE.DirectionalLight(0xdfe8ff, 0.65); rim.position.set(0, 3, -4.5); scene.add(rim);
 
-/* 地面（只接影） */
+/* 地面（接影） */
 {
   const ground = new THREE.Mesh(
     new THREE.CircleGeometry(2.4, 48),
     new THREE.ShadowMaterial({ opacity: 0.30 }));
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -1.10;
+  ground.position.y = -1.098;
   ground.receiveShadow = true;
   scene.add(ground);
+}
+/* 摄影棚背景：渐变墙 + 地台（参考图风格） */
+{
+  const bc = document.createElement('canvas'); bc.width = 8; bc.height = 256;
+  const bg = bc.getContext('2d');
+  const grd = bg.createLinearGradient(0, 0, 0, 256);
+  grd.addColorStop(0, '#8f8a9c'); grd.addColorStop(0.55, '#7b7688'); grd.addColorStop(1, '#494552');
+  bg.fillStyle = grd; bg.fillRect(0, 0, 8, 256);
+  const wallTex = new THREE.CanvasTexture(bc);
+  wallTex.colorSpace = THREE.SRGBColorSpace;
+  const wall = new THREE.Mesh(new THREE.PlaneGeometry(18, 11),
+    new THREE.MeshBasicMaterial({ map: wallTex }));
+  wall.position.set(0, 1.8, -6.5);
+  scene.add(wall);
+  const fc = document.createElement('canvas'); fc.width = fc.height = 256;
+  const fg = fc.getContext('2d');
+  const grd2 = fg.createRadialGradient(128, 118, 30, 128, 128, 130);
+  grd2.addColorStop(0, '#8a8596'); grd2.addColorStop(1, '#39363f');
+  fg.fillStyle = grd2; fg.fillRect(0, 0, 256, 256);
+  const floorTex = new THREE.CanvasTexture(fc);
+  floorTex.colorSpace = THREE.SRGBColorSpace;
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(7.5, 48),
+    new THREE.MeshStandardMaterial({ map: floorTex, roughness: 1 }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = -1.10;
+  floor.receiveShadow = true;
+  scene.add(floor);
 }
 
 /* 面料细噪点（画进印花区底色） */
@@ -388,7 +415,7 @@ function fabricMat(darken = 0, bump = null, bumpScale = 0.5) {
   const m = new THREE.MeshPhysicalMaterial({
     roughness: 0.94, metalness: 0,
     sheen: 0.55, sheenRoughness: 0.85,
-    envMapIntensity: 0.62,
+    envMapIntensity: 0.72,
     side: THREE.DoubleSide,
   });
   if (bump) { m.bumpMap = bump; m.bumpScale = bumpScale; }
@@ -446,21 +473,34 @@ function seNormal(rx, rz, t) { // 截面外法线（xz 平面，数值求导）
   const l = Math.hypot(tx, tz) || 1;
   return { nx: -tz / l, nz: tx / l };
 }
-/* ---------- 布料褶皱（确定性扰动，告别"完美光滑"） ---------- */
-function wrinkle(t, y) { // 衣身：大而软的垂坠褶 + 腰部压缩褶
-  const drape = THREE.MathUtils.clamp((-y + 0.30) / 1.15, 0, 1);
-  const fold =
-    Math.sin(t * 3 + 2.0) * 0.55 +
-    Math.sin(t * 6 + 1.3) * 0.30 +
-    Math.sin(t * 11 + 4.2) * 0.15;
-  const waist = Math.exp(-Math.pow((y + 0.42) / 0.16, 2)) * Math.sin(t * 9 + 0.8) * 0.5;
-  const micro = Math.sin(y * 22 + t * 4) * 0.15;
-  return (fold * (0.30 + 0.70 * drape) + micro * drape + waist) * 0.013;
+/* ---------- 有机褶皱：确定性值噪声 fBm（不规则、不对称，像真布料） ---------- */
+function hash2(i, j) {
+  const s = Math.sin(i * 127.1 + j * 311.7) * 43758.5453;
+  return s - Math.floor(s);
 }
-function sleeveWrinkle(u, th) { // 袖管：沿袖长缓和起伏
-  return (Math.sin(th * 5 + u * 9) * 0.5 +
-          Math.sin(th * 8 - u * 14 + 1.7) * 0.3 +
-          Math.sin(u * 24) * 0.2) * 0.008;
+function vnoise(u, v) {
+  const i = Math.floor(u), j = Math.floor(v);
+  const fu = u - i, fv = v - j;
+  const sm = x => x * x * (3 - 2 * x);
+  const a = hash2(i, j), b = hash2(i + 1, j), c = hash2(i, j + 1), d = hash2(i + 1, j + 1);
+  const su = sm(fu), sv = sm(fv);
+  return a + (b - a) * su + (c - a) * sv + (a - b - c + d) * su * sv;
+}
+function fbm(u, v) {
+  return vnoise(u, v) * 0.55 + vnoise(u * 2.3 + 7.1, v * 2.3 + 3.7) * 0.28 + vnoise(u * 5.1 + 13.3, v * 5.1 + 9.2) * 0.17;
+}
+function wrinkle(t, y) { // 衣身：低频大褶 + fBm 细褶，越靠下摆越明显
+  const drape = THREE.MathUtils.clamp((-y + 0.30) / 1.15, 0, 1);
+  const u = (t + Math.PI) / (Math.PI * 2) * 14;
+  const v = (y + 0.90) / 1.56 * 16;
+  const folds = (fbm(u, v) - 0.5) * 2;
+  const ridge = Math.sin(t * 3 + (fbm(u * 0.5, v * 0.5) - 0.5) * 4.5);
+  const waist = Math.exp(-Math.pow((y + 0.42) / 0.18, 2)) * (fbm(u * 0.8 + 5.3, 1.7) - 0.5) * 1.5;
+  return (ridge * 0.5 + folds * 0.62 * (0.35 + 0.65 * drape) + waist * 0.55 * drape) * 0.017;
+}
+function sleeveWrinkle(u, th) { // 袖管：fBm 缓起伏
+  const uu = u * 20, vv = (th + Math.PI) / (Math.PI * 2) * 12;
+  return (fbm(uu + 21.7, vv + 8.4) - 0.5) * 0.024;
 }
 function loftGeometry(rings, closed) {
   const rows = rings.length, cols = rings[0].length;
@@ -493,7 +533,7 @@ function zoneMaterial(tex) {
   return new THREE.MeshPhysicalMaterial({
     map: tex, roughness: 0.94, metalness: 0,
     sheen: 0.55, sheenRoughness: 0.85,
-    envMapIntensity: 0.62,
+    envMapIntensity: 0.72,
     bumpMap: repTex(knitC, 12, 9), bumpScale: 0.5,
     side: THREE.DoubleSide,
   });
@@ -556,9 +596,17 @@ function buildZone(key, { W, H, base, rings }) {
   const inner = new THREE.Group();
   // 缺口（帽筒开口）转到环的 -Y 方向：缺口中心角 = ARC + gap/2
   inner.rotation.z = Math.PI * 1.5 - (ARC + (2 * Math.PI - ARC) / 2);
-  const tubeOuter = new THREE.Mesh(
-    new THREE.TorusGeometry(R, 0.175, 20, 64, ARC),
-    fabricMat(0.03, repTex(knitC, 10, 8)));
+  const tubeGeo = new THREE.TorusGeometry(R, 0.175, 20, 64, ARC);
+  { // 帽筒表面有机起伏（确定性 fBm）
+    const pa = tubeGeo.attributes.position;
+    for (let k = 0; k < pa.count; k++) {
+      const x = pa.getX(k), y = pa.getY(k), z = pa.getZ(k);
+      const n = (fbm(x * 9 + 2.2, y * 9 + z * 9 + 4.4) - 0.5) * 0.03;
+      pa.setXYZ(k, x + n * 0.7, y + n, z + n * 0.7);
+    }
+    tubeGeo.computeVertexNormals();
+  }
+  const tubeOuter = new THREE.Mesh(tubeGeo, fabricMat(0.03, repTex(knitC, 10, 8)));
   const tubeInner = new THREE.Mesh(
     new THREE.TorusGeometry(R, 0.140, 14, 48, ARC),
     new THREE.MeshStandardMaterial({ color: '#0f1013', roughness: 0.97, side: THREE.DoubleSide }));
