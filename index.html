@@ -1853,6 +1853,8 @@ async function initApp() {
   const modelUrl = await detectModelFile();
   if (modelUrl) {
     MODE = 'model';
+    // 用户模型优先：隐藏程序化卫衣，避免盖住 model/ 里的真实模型
+    proceduralRoot.visible = false;
     await loadModelGarment(modelUrl);
     toast('已加载真实模型（贴花模式）');
   }
