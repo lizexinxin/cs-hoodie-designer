@@ -319,6 +319,7 @@ key.shadow.camera.left = -2.2; key.shadow.camera.right = 2.2;
 key.shadow.camera.top = 2.2; key.shadow.camera.bottom = -2.2;
 key.shadow.camera.near = 0.5; key.shadow.camera.far = 14;
 key.shadow.bias = -0.0006;
+key.shadow.normalBias = 0.03;
 scene.add(key);
 const fill = new THREE.DirectionalLight(0xffffff, 0.32); fill.position.set(-3.2, 2, 1.5); scene.add(fill);
 const rim = new THREE.DirectionalLight(0xdfe8ff, 0.65); rim.position.set(0, 3, -4.5); scene.add(rim);
@@ -444,6 +445,21 @@ function seNormal(rx, rz, t) { // 截面外法线（xz 平面，数值求导）
   const l = Math.hypot(tx, tz) || 1;
   return { nx: -tz / l, nz: tx / l };
 }
+/* ---------- 布料褶皱（确定性扰动，告别"完美光滑"） ---------- */
+function wrinkle(t, y) { // 衣身：垂坠褶越靠下摆越明显
+  const drape = THREE.MathUtils.clamp((-y + 0.25) / 1.1, 0, 1);
+  const fold =
+    Math.sin(t * 7 + 1.3) * 0.45 +
+    Math.sin(t * 12 + 4.2) * 0.25 +
+    Math.sin(t * 3 + 2.0) * 0.55;
+  const micro = Math.sin(y * 26 + t * 4) * 0.18;
+  return (fold * (0.35 + 0.65 * drape) + micro * drape) * 0.011;
+}
+function sleeveWrinkle(u, th) { // 袖管：沿袖长缓和起伏
+  return (Math.sin(th * 5 + u * 9) * 0.5 +
+          Math.sin(th * 8 - u * 14 + 1.7) * 0.3 +
+          Math.sin(u * 24) * 0.2) * 0.008;
+}
 function loftGeometry(rings, closed) {
   const rows = rings.length, cols = rings[0].length;
   const jmax = closed ? cols : cols - 1;
@@ -487,12 +503,13 @@ function buildZone(key, { W, H, base, rings }) {
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   const mesh = new THREE.Mesh(loftGeometry(rings, false), zoneMaterial(tex));
+  mesh.receiveShadow = true;
   mesh.userData.zoneKey = key;
   scene.add(mesh);
   zoneMeshes[key] = { mesh, canvas, ctx: canvas.getContext('2d'), tex, cfg: { W, H, base } };
 }
 
-/* 躯干：版型截面逐层放样，领口内卷 */
+/* 躯干：版型截面逐层放样 + 布料褶皱，领口内卷 */
 {
   const prof = [...PROFILE, [0.655, 0.238, 0.220], [0.643, 0.212, 0.198]];
   const rings = [];
@@ -500,15 +517,18 @@ function buildZone(key, { W, H, base, rings }) {
     const ring = [];
     for (let j = 0; j < 72; j++) {
       const t = -Math.PI + (j / 72) * Math.PI * 2;
-      ring.push(sePoint(rx, rz, t).setY(y));
+      const p = sePoint(rx, rz, t);
+      const n = seNormal(rx, rz, t);
+      const d = wrinkle(t, y);
+      ring.push(new THREE.Vector3(p.x + n.nx * d, y, p.z + n.nz * d));
     }
     rings.push(ring);
   }
   const torso = new THREE.Mesh(loftGeometry(rings, true), fabricMat(0, repTex(knitC, 12, 9)));
-  torso.castShadow = true;
+  torso.castShadow = true; torso.receiveShadow = true;
   scene.add(torso);
 }
-/* 下摆罗纹 */
+/* 下摆罗纹（跟随衣身褶皱） */
 {
   const rings = [];
   for (const y of [-0.855, -0.825, -0.798, -0.778]) {
@@ -516,12 +536,15 @@ function buildZone(key, { W, H, base, rings }) {
     const ring = [];
     for (let j = 0; j < 72; j++) {
       const t = -Math.PI + (j / 72) * Math.PI * 2;
-      ring.push(sePoint(rx + 0.004, rz + 0.004, t).setY(y));
+      const p = sePoint(rx + 0.004, rz + 0.004, t);
+      const n = seNormal(rx + 0.004, rz + 0.004, t);
+      const d = wrinkle(t, y);
+      ring.push(new THREE.Vector3(p.x + n.nx * d, y, p.z + n.nz * d));
     }
     rings.push(ring);
   }
   const hem = new THREE.Mesh(loftGeometry(rings, true), fabricMat(0.14, repTex(ribC, 46, 2), 1.4));
-  hem.castShadow = true;
+  hem.castShadow = true; hem.receiveShadow = true;
   scene.add(hem);
 }
 /* 兜帽：球壳罩体（几乎整圈、前侧开口）+ 暗色内衬 */
@@ -547,6 +570,17 @@ function buildZone(key, { W, H, base, rings }) {
   neck.rotation.x = -Math.PI / 2 + 0.35;
   neck.position.set(0, 0.648, 0.02);
   scene.add(neck);
+}
+/* 领口罗纹圈 */
+{
+  const rib = new THREE.Mesh(
+    new THREE.TorusGeometry(0.26, 0.021, 10, 48),
+    fabricMat(0.12, repTex(ribC, 30, 1), 1.2));
+  rib.position.set(0, 0.622, -0.008);
+  rib.rotation.x = Math.PI / 2 - 0.15;
+  rib.scale.set(1.18, 1, 0.92);
+  rib.castShadow = true; rib.receiveShadow = true;
+  scene.add(rib);
 }
 /* 帽绳 + 金属绳头 + 气眼 */
 for (const sx of [-1, 1]) {
@@ -585,7 +619,8 @@ function garmentZoneRings(yTop, yBot, t0, t1) {
       const t = t0 + (t1 - t0) * (j / 25);
       const p = sePoint(rx, rz, t);
       const n = seNormal(rx, rz, t);
-      ring.push(new THREE.Vector3(p.x + n.nx * Z_OFF, y, p.z + n.nz * Z_OFF));
+      const d = Z_OFF + wrinkle(t, y);
+      ring.push(new THREE.Vector3(p.x + n.nx * d, y, p.z + n.nz * d));
     }
     rings.push(ring);
   }
@@ -603,11 +638,12 @@ function sleeveFrame(curve, u) {
   const V = new THREE.Vector3().crossVectors(T, U).normalize();  // 截面另一轴
   return { P, U, V, r: 0.205 - 0.07 * smoothstep(u) };
 }
-function sleeveRing(P, U, V, r, th, rzK = 0.94) {
+function sleeveRing(P, U, V, r, th, w = 0, rzK = 0.94) {
+  const rr = r + w;
   return new THREE.Vector3(
-    P.x + (U.x * Math.cos(th) + V.x * Math.sin(th) * rzK) * r,
-    P.y + (U.y * Math.cos(th) + V.y * Math.sin(th) * rzK) * r,
-    P.z + (U.z * Math.cos(th) + V.z * Math.sin(th) * rzK) * r);
+    P.x + (U.x * Math.cos(th) + V.x * Math.sin(th) * rzK) * rr,
+    P.y + (U.y * Math.cos(th) + V.y * Math.sin(th) * rzK) * rr,
+    P.z + (U.z * Math.cos(th) + V.z * Math.sin(th) * rzK) * rr);
 }
 function buildSleeve(side) {
   const curve = new THREE.CatmullRomCurve3([
@@ -620,24 +656,32 @@ function buildSleeve(side) {
   // 袖管
   const rings = [];
   for (let i = 0; i < 18; i++) {
-    const { P, U, V, r } = sleeveFrame(curve, i / 17);
+    const u = i / 17;
+    const { P, U, V, r } = sleeveFrame(curve, u);
     const ring = [];
-    for (let j = 0; j < 28; j++) ring.push(sleeveRing(P, U, V, r, (j / 28) * Math.PI * 2));
+    for (let j = 0; j < 28; j++) {
+      const th = (j / 28) * Math.PI * 2;
+      ring.push(sleeveRing(P, U, V, r, th, sleeveWrinkle(u, th)));
+    }
     rings.push(ring);
   }
   const arm = new THREE.Mesh(loftGeometry(rings, true), fabricMat(0, repTex(knitC, 12, 9)));
-  arm.castShadow = true;
+  arm.castShadow = true; arm.receiveShadow = true;
   scene.add(arm);
   // 罗纹袖口
   const cr = [];
   for (let i = 0; i < 4; i++) {
-    const { P, U, V, r } = sleeveFrame(curve, 0.88 + 0.12 * (i / 3));
+    const uu = 0.88 + 0.12 * (i / 3);
+    const { P, U, V, r } = sleeveFrame(curve, uu);
     const ring = [];
-    for (let j = 0; j < 28; j++) ring.push(sleeveRing(P, U, V, r + 0.0045, (j / 28) * Math.PI * 2));
+    for (let j = 0; j < 28; j++) {
+      const th = (j / 28) * Math.PI * 2;
+      ring.push(sleeveRing(P, U, V, r + 0.0045, th, sleeveWrinkle(uu, th)));
+    }
     cr.push(ring);
   }
   const cuff = new THREE.Mesh(loftGeometry(cr, true), fabricMat(0.14, repTex(ribC, 26, 1.6), 1.4));
-  cuff.castShadow = true;
+  cuff.castShadow = true; cuff.receiveShadow = true;
   scene.add(cuff);
   // 外侧印花条带（行序：袖口侧→肩侧；θ 排序保证外侧看文字正向）
   const zrings = [];
@@ -648,7 +692,7 @@ function buildSleeve(side) {
     for (let j = 0; j < 16; j++) {
       const f = j / 15;
       const th = side > 0 ? span * (1 - f) : -span + 2 * span * f;
-      ring.push(sleeveRing(P, U, V, r + 0.006, th));
+      ring.push(sleeveRing(P, U, V, r + 0.006, th, sleeveWrinkle(uu, th)));
     }
     zrings.push(ring);
   }
