@@ -197,11 +197,15 @@
 </div>
 
 <script type="importmap">
-{ "imports": { "three": "./vendor/three.module.js" } }
+{ "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/addons/"
+} }
 </script>
 
 <script type="module">
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 /* =========================================================
    数据：10 支战队（简化队徽 = 配色 + 形状 + 缩写，可上传官方图替换）
@@ -294,31 +298,43 @@ const container = document.getElementById('viewport');
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.06;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 container.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0x2c2e36, 1.15));
-const key = new THREE.DirectionalLight(0xffffff, 1.8); key.position.set(2.6, 4.2, 3.2); scene.add(key);
-const fill = new THREE.DirectionalLight(0xffffff, 0.55); fill.position.set(-3.2, 2, 1.5); scene.add(fill);
-const rim = new THREE.DirectionalLight(0xdfe8ff, 1.0); rim.position.set(0, 3, -4.5); scene.add(rim);
+/* 柔和棚拍环境光 + 主投影灯 */
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
-/* 地面软阴影 */
+const key = new THREE.DirectionalLight(0xffffff, 1.45);
+key.position.set(2.6, 4.6, 3.4);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.left = -2.2; key.shadow.camera.right = 2.2;
+key.shadow.camera.top = 2.2; key.shadow.camera.bottom = -2.2;
+key.shadow.camera.near = 0.5; key.shadow.camera.far = 14;
+key.shadow.bias = -0.0006;
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff, 0.32); fill.position.set(-3.2, 2, 1.5); scene.add(fill);
+const rim = new THREE.DirectionalLight(0xdfe8ff, 0.65); rim.position.set(0, 3, -4.5); scene.add(rim);
+
+/* 地面（只接影） */
 {
-  const sc = document.createElement('canvas'); sc.width = sc.height = 256;
-  const sg = sc.getContext('2d');
-  const grd = sg.createRadialGradient(128, 128, 12, 128, 128, 128);
-  grd.addColorStop(0, 'rgba(0,0,0,.42)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
-  sg.fillStyle = grd; sg.fillRect(0, 0, 256, 256);
-  const tex = new THREE.CanvasTexture(sc);
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 3.6),
-    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
-  m.rotation.x = -Math.PI / 2; m.position.y = -1.04;
-  scene.add(m);
+  const ground = new THREE.Mesh(
+    new THREE.CircleGeometry(2.4, 48),
+    new THREE.ShadowMaterial({ opacity: 0.30 }));
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -1.10;
+  ground.receiveShadow = true;
+  scene.add(ground);
 }
 
-/* 面料噪点 */
+/* 面料细噪点（画进印花区底色） */
 const noiseC = (() => {
   const c = document.createElement('canvas'); c.width = c.height = 180;
   const g = c.getContext('2d');
@@ -331,10 +347,50 @@ const noiseC = (() => {
   return c;
 })();
 
-/* 普通面料材质（随衣服颜色更新） */
+/* 针织线圈凹凸（bumpMap）与罗纹竖条 */
+const knitC = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 96;
+  const g = c.getContext('2d');
+  g.fillStyle = '#808080'; g.fillRect(0, 0, 96, 96);
+  for (let y = 0; y < 96; y += 8) {
+    for (let x = 0; x < 96; x += 8) {
+      const ph = ((x / 8 + y / 8) % 2) ? 1 : -1;
+      g.strokeStyle = ph > 0 ? '#b0b0b0' : '#505050';
+      g.lineWidth = 3;
+      g.beginPath();
+      g.ellipse(x + 4, y + 4, 3.4, 2.2, ph * 0.55, 0, Math.PI * 2);
+      g.stroke();
+    }
+  }
+  return c;
+})();
+const ribC = (() => {
+  const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+  const g = c.getContext('2d');
+  for (let x = 0; x < 64; x++) {
+    const v = 128 + Math.round(72 * Math.sin(x * Math.PI / 4));
+    g.fillStyle = `rgb(${v},${v},${v})`;
+    g.fillRect(x, 0, 1, 64);
+  }
+  return c;
+})();
+function repTex(canvas, rx, ry) {
+  const t = new THREE.CanvasTexture(canvas);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(rx, ry);
+  return t;
+}
+
+/* 布料材质（双面 + sheen 织物光泽 + 凹凸） */
 const plainMats = [];
-function fabricMat(darken = 0) {
-  const m = new THREE.MeshStandardMaterial({ roughness: .93, metalness: 0 });
+function fabricMat(darken = 0, bump = null, bumpScale = 0.5) {
+  const m = new THREE.MeshPhysicalMaterial({
+    roughness: 0.94, metalness: 0,
+    sheen: 0.55, sheenRoughness: 0.85,
+    envMapIntensity: 0.5,
+    side: THREE.DoubleSide,
+  });
+  if (bump) { m.bumpMap = bump; m.bumpScale = bumpScale; }
   m.userData.darken = darken;
   plainMats.push(m);
   return m;
@@ -349,128 +405,262 @@ function applyFabricColor() {
   redrawAllZones();
 }
 
-/* ---------- 印花区域（Zone）：每个区域一张 canvas 纹理 ---------- */
+/* =========================================================
+   版型放样：截面轮廓 → 布面
+========================================================= */
+const PROFILE = [ // 躯干横截面 [y, rx, rz]，自下而上（落肩 + 微 A 字）
+  [-0.860, 0.500, 0.380],
+  [-0.600, 0.506, 0.386],
+  [-0.300, 0.496, 0.376],
+  [ 0.000, 0.478, 0.360],
+  [ 0.250, 0.458, 0.344],
+  [ 0.420, 0.430, 0.328],
+  [ 0.520, 0.394, 0.310],
+  [ 0.600, 0.332, 0.276],
+  [ 0.645, 0.262, 0.238],
+];
+function sectionAt(y) {
+  const P = PROFILE;
+  if (y <= P[0][0]) return { rx: P[0][1], rz: P[0][2] };
+  for (let i = 0; i < P.length - 1; i++) {
+    if (y <= P[i + 1][0]) {
+      const f = (y - P[i][0]) / (P[i + 1][0] - P[i][0]);
+      return { rx: P[i][1] + (P[i + 1][1] - P[i][1]) * f, rz: P[i][2] + (P[i + 1][2] - P[i][2]) * f };
+    }
+  }
+  const L = P[P.length - 1];
+  return { rx: L[1], rz: L[2] };
+}
+const SE_N = 2.6; // 超椭圆指数：2=椭圆，越大越"方"（更像布料的扁截面）
+function sePoint(rx, rz, t) { // t=0 正前(+z)，t=π/2 右侧，t=π 背后
+  const c = Math.cos(t), s = Math.sin(t);
+  return new THREE.Vector3(
+    rx * Math.sign(s) * Math.pow(Math.abs(s), 2 / SE_N), 0,
+    rz * Math.sign(c) * Math.pow(Math.abs(c), 2 / SE_N));
+}
+function seNormal(rx, rz, t) { // 截面外法线（xz 平面，数值求导）
+  const p2 = sePoint(rx, rz, t + 0.01), p0 = sePoint(rx, rz, t - 0.01);
+  const tx = p2.x - p0.x, tz = p2.z - p0.z;
+  const l = Math.hypot(tx, tz) || 1;
+  return { nx: -tz / l, nz: tx / l };
+}
+function loftGeometry(rings, closed) {
+  const rows = rings.length, cols = rings[0].length;
+  const jmax = closed ? cols : cols - 1;
+  const pos = [], uvs = [], idx = [];
+  for (let i = 0; i < rows; i++) {
+    for (let j = 0; j <= jmax; j++) {
+      const p = rings[i][j % cols];
+      pos.push(p.x, p.y, p.z);
+      uvs.push(j / jmax, i / (rows - 1));
+    }
+  }
+  for (let i = 0; i < rows - 1; i++) {
+    for (let j = 0; j < jmax; j++) {
+      const a = i * (jmax + 1) + j, b = a + 1, c = a + jmax + 1, d = c + 1;
+      idx.push(a, b, d, a, d, c);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
 
+/* ---------- 印花区域（Zone）：贴在衣身上的 canvas 纹理条带 ---------- */
 const zoneMeshes = {};
-function buildZone(key, cfg) {
+function zoneMaterial(tex) {
+  return new THREE.MeshPhysicalMaterial({
+    map: tex, roughness: 0.94, metalness: 0,
+    sheen: 0.55, sheenRoughness: 0.85,
+    envMapIntensity: 0.5,
+    bumpMap: repTex(knitC, 12, 9), bumpScale: 0.5,
+    side: THREE.DoubleSide,
+  });
+}
+function buildZone(key, { W, H, base, rings }) {
   const canvas = document.createElement('canvas');
-  canvas.width = cfg.W; canvas.height = cfg.H;
+  canvas.width = W; canvas.height = H;
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  const mesh = new THREE.Mesh(cfg.geo, new THREE.MeshStandardMaterial({
-    map: tex, roughness: .94, metalness: 0,
-  }));
-  if (cfg.mirror) mirrorGeometry(cfg.geo);
-  mesh.position.set(cfg.x || 0, cfg.y, cfg.z || 0);
-  if (cfg.sz) mesh.scale.z = cfg.sz;
+  const mesh = new THREE.Mesh(loftGeometry(rings, false), zoneMaterial(tex));
   mesh.userData.zoneKey = key;
   scene.add(mesh);
-  zoneMeshes[key] = { mesh, canvas, ctx: canvas.getContext('2d'), tex, cfg };
+  zoneMeshes[key] = { mesh, canvas, ctx: canvas.getContext('2d'), tex, cfg: { W, H, base } };
 }
 
-const FRONT_THETA = 0.85;
-/* 躯干（纯色） */
+/* 躯干：版型截面逐层放样，领口内卷 */
 {
-  const torso = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.42, 0.54, 1.35, 64, 1, false),
-    fabricMat(0));
-  torso.position.y = -0.125; torso.scale.z = 0.78;
+  const prof = [...PROFILE, [0.655, 0.238, 0.220], [0.643, 0.212, 0.198]];
+  const rings = [];
+  for (const [y, rx, rz] of prof) {
+    const ring = [];
+    for (let j = 0; j < 72; j++) {
+      const t = -Math.PI + (j / 72) * Math.PI * 2;
+      ring.push(sePoint(rx, rz, t).setY(y));
+    }
+    rings.push(ring);
+  }
+  const torso = new THREE.Mesh(loftGeometry(rings, true), fabricMat(0, repTex(knitC, 12, 9)));
+  torso.castShadow = true;
   scene.add(torso);
 }
 /* 下摆罗纹 */
 {
-  const hem = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.545, 0.555, 0.16, 64, 1, true),
-    fabricMat(0.16));
-  hem.material.side = THREE.DoubleSide;
-  hem.position.y = -0.86; hem.scale.z = 0.78;
+  const rings = [];
+  for (const y of [-0.855, -0.825, -0.798, -0.778]) {
+    const { rx, rz } = sectionAt(y);
+    const ring = [];
+    for (let j = 0; j < 72; j++) {
+      const t = -Math.PI + (j / 72) * Math.PI * 2;
+      ring.push(sePoint(rx + 0.004, rz + 0.004, t).setY(y));
+    }
+    rings.push(ring);
+  }
+  const hem = new THREE.Mesh(loftGeometry(rings, true), fabricMat(0.14, repTex(ribC, 46, 2), 1.4));
+  hem.castShadow = true;
   scene.add(hem);
 }
-/* 袋鼠兜（只微微凸出，保证不遮住下摆区的印花） */
-{
-  const pocket = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.5047, 0.5376, 0.36, 64, 1, true, -0.72, 1.44),
-    fabricMat(0.09));
-  pocket.material.side = THREE.DoubleSide;
-  pocket.position.y = -0.56; pocket.scale.z = 0.78;
-  scene.add(pocket);
-}
-/* 帽子（翻搭在肩后的领圈，开口朝前下） */
+/* 兜帽：球壳罩体（几乎整圈、前侧开口）+ 暗色内衬 */
 {
   const hood = new THREE.Mesh(
-    new THREE.TorusGeometry(0.20, 0.165, 18, 48),
-    fabricMat(0.06));
-  hood.material.side = THREE.DoubleSide;
-  hood.rotation.x = Math.PI / 2 - 0.45;
-  hood.position.set(0, 0.545, -0.11);
-  hood.scale.set(1.16, 0.88, 1.0);
+    new THREE.SphereGeometry(0.30, 40, 26, Math.PI * 1.5 - 1.42, 2.84, 0.04, 1.81),
+    fabricMat(0.03, repTex(knitC, 10, 8)));
+  hood.position.set(0, 0.53, -0.17);
+  hood.scale.set(1.22, 0.94, 1.08);
+  hood.castShadow = true;
   scene.add(hood);
+  const liner = new THREE.Mesh(
+    new THREE.SphereGeometry(0.284, 32, 20, Math.PI * 1.5 - 1.30, 2.60, 0.10, 1.74),
+    new THREE.MeshStandardMaterial({ color: '#101114', roughness: 0.96, side: THREE.DoubleSide }));
+  liner.position.set(0, 0.527, -0.162);
+  liner.scale.set(1.19, 0.92, 1.05);
+  scene.add(liner);
 }
-/* 领口阴影 */
+/* 领口开口 */
 {
-  const neck = new THREE.Mesh(new THREE.CircleGeometry(0.30, 32),
-    new THREE.MeshBasicMaterial({ color: '#08090c' }));
-  neck.rotation.x = -Math.PI / 2 + 0.30;
-  neck.position.set(0, 0.565, 0.05);
+  const neck = new THREE.Mesh(new THREE.CircleGeometry(0.235, 32),
+    new THREE.MeshBasicMaterial({ color: '#0a0b0e' }));
+  neck.rotation.x = -Math.PI / 2 + 0.35;
+  neck.position.set(0, 0.648, 0.02);
   scene.add(neck);
 }
-/* 帽绳 */
+/* 帽绳 + 金属绳头 + 气眼 */
 for (const sx of [-1, 1]) {
-  const grp = new THREE.Group();
-  const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.26, 8),
-    new THREE.MeshStandardMaterial({ color: '#d8d5cc', roughness: .8 }));
-  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.035, 8),
-    new THREE.MeshStandardMaterial({ color: '#8d8a82', roughness: .5, metalness: .6 }));
-  rope.position.y = -0.13; tip.position.y = -0.275;
-  grp.add(rope, tip);
-  grp.position.set(0.095 * sx, 0.40, 0.345);
-  grp.rotation.z = -0.08 * sx;
-  scene.add(grp);
+  const pts = [
+    new THREE.Vector3(0.100 * sx, 0.565, 0.283),
+    new THREE.Vector3(0.115 * sx, 0.43, 0.318),
+    new THREE.Vector3(0.108 * sx, 0.28, 0.352),
+    new THREE.Vector3(0.100 * sx, 0.16, 0.362),
+  ];
+  const rope = new THREE.Mesh(
+    new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 20, 0.0115, 8),
+    new THREE.MeshStandardMaterial({ color: '#dad6cc', roughness: .85 }));
+  rope.castShadow = true;
+  scene.add(rope);
+  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.0135, 0.0135, 0.05, 10),
+    new THREE.MeshStandardMaterial({ color: '#8f8c85', roughness: .35, metalness: .8 }));
+  tip.position.copy(pts[3]);
+  tip.rotation.x = 0.12;
+  scene.add(tip);
+  const eye = new THREE.Mesh(new THREE.TorusGeometry(0.017, 0.0055, 8, 20),
+    new THREE.MeshStandardMaterial({ color: '#1c1d22', roughness: .4, metalness: .3 }));
+  eye.position.set(0.100 * sx, 0.566, 0.281);
+  eye.rotation.x = -0.12;
+  scene.add(eye);
 }
 
-/* 正 / 背印花区（锥度与躯干一致，整体外扩 0.006，避免陷入衣服） */
-buildZone('front', {
-  W: 1024, H: 1520, base: 210, y: -0.155, sz: 0.78,
-  geo: new THREE.CylinderGeometry(0.4345, 0.5429, 1.22, 64, 1, true, -FRONT_THETA, FRONT_THETA * 2),
-});
-buildZone('back', {
-  W: 1024, H: 1520, base: 210, y: -0.155, sz: 0.78,
-  geo: new THREE.CylinderGeometry(0.4345, 0.5429, 1.22, 64, 1, true, Math.PI - FRONT_THETA, FRONT_THETA * 2),
-});
+/* 正 / 背印花区：沿版型截面外扩 0.007，严丝合缝 */
+const Z_Y_TOP = 0.50, Z_Y_BOT = -0.80, Z_TW = 0.92, Z_OFF = 0.007;
+function garmentZoneRings(yTop, yBot, t0, t1) {
+  const rings = [];
+  for (let i = 0; i < 16; i++) {
+    const y = yBot + (yTop - yBot) * (i / 15);
+    const { rx, rz } = sectionAt(y);
+    const ring = [];
+    for (let j = 0; j < 26; j++) {
+      const t = t0 + (t1 - t0) * (j / 25);
+      const p = sePoint(rx, rz, t);
+      const n = seNormal(rx, rz, t);
+      ring.push(new THREE.Vector3(p.x + n.nx * Z_OFF, y, p.z + n.nz * Z_OFF));
+    }
+    rings.push(ring);
+  }
+  return rings;
+}
+buildZone('front', { W: 1024, H: 1520, base: 210, rings: garmentZoneRings(Z_Y_TOP, Z_Y_BOT, -Z_TW, Z_TW) });
+buildZone('back',  { W: 1024, H: 1520, base: 210, rings: garmentZoneRings(Z_Y_TOP, Z_Y_BOT, Math.PI - Z_TW, Math.PI + Z_TW) });
 
-/* 袖子 + 袖印花区（接缝藏在身体内侧） */
+/* 袖子：肩→肘→袖口曲线放样（锥形 + 微前弯）+ 罗纹袖口 + 外侧印花条带 */
+const smoothstep = u => u * u * (3 - 2 * u);
+function sleeveFrame(curve, u) {
+  const P = curve.getPointAt(u);
+  const T = curve.getTangentAt(u).normalize();
+  const U = new THREE.Vector3(P.x, 0, P.z).normalize();          // 朝外
+  const V = new THREE.Vector3().crossVectors(T, U).normalize();  // 截面另一轴
+  return { P, U, V, r: 0.205 - 0.07 * smoothstep(u) };
+}
+function sleeveRing(P, U, V, r, th, rzK = 0.94) {
+  return new THREE.Vector3(
+    P.x + (U.x * Math.cos(th) + V.x * Math.sin(th) * rzK) * r,
+    P.y + (U.y * Math.cos(th) + V.y * Math.sin(th) * rzK) * r,
+    P.z + (U.z * Math.cos(th) + V.z * Math.sin(th) * rzK) * r);
+}
 function buildSleeve(side) {
-  const grp = new THREE.Group();
-  grp.position.set(0.56 * side, 0.48, -0.02);
-  const dir = new THREE.Vector3(0.14 * side, -1, -0.06).normalize();
-  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-  grp.quaternion.copy(q);
-
-  // 圆柱 radiusTop 在局部 +y 端；本组局部 +y 指向袖口方向
-  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.175, 0.215, 1.05, 32), fabricMat(0));
-  arm.position.y = 0.45;
-  const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.170, 0.166, 0.15, 32), fabricMat(0.16));
-  cuff.position.y = 0.97;
-  grp.add(arm, cuff);
-
-  // 接缝朝身体内侧、画布中心(u=0.5)朝袖子外侧：由 thetaIn 推算
-  const inwardLocal = new THREE.Vector3(-side, 0, 0).applyQuaternion(q.clone().invert());
-  const thetaIn = Math.atan2(inwardLocal.x, inwardLocal.z);
-  const geo = new THREE.CylinderGeometry(0.193, 0.2167, 0.62, 48, 1, true, thetaIn, Math.PI * 2);
-  const mesh = new THREE.Mesh(geo, null);
-  const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 488;
+  const curve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.365 * side, 0.515, 0.015),
+    new THREE.Vector3(0.500 * side, 0.270, -0.015),
+    new THREE.Vector3(0.575 * side, 0.000, -0.045),
+    new THREE.Vector3(0.615 * side, -0.250, 0.005),
+    new THREE.Vector3(0.635 * side, -0.475, 0.085),
+  ]);
+  // 袖管
+  const rings = [];
+  for (let i = 0; i < 18; i++) {
+    const { P, U, V, r } = sleeveFrame(curve, i / 17);
+    const ring = [];
+    for (let j = 0; j < 28; j++) ring.push(sleeveRing(P, U, V, r, (j / 28) * Math.PI * 2));
+    rings.push(ring);
+  }
+  const arm = new THREE.Mesh(loftGeometry(rings, true), fabricMat(0, repTex(knitC, 12, 9)));
+  arm.castShadow = true;
+  scene.add(arm);
+  // 罗纹袖口
+  const cr = [];
+  for (let i = 0; i < 4; i++) {
+    const { P, U, V, r } = sleeveFrame(curve, 0.88 + 0.12 * (i / 3));
+    const ring = [];
+    for (let j = 0; j < 28; j++) ring.push(sleeveRing(P, U, V, r + 0.0045, (j / 28) * Math.PI * 2));
+    cr.push(ring);
+  }
+  const cuff = new THREE.Mesh(loftGeometry(cr, true), fabricMat(0.14, repTex(ribC, 26, 1.6), 1.4));
+  cuff.castShadow = true;
+  scene.add(cuff);
+  // 外侧印花条带（行序：袖口侧→肩侧；θ 排序保证外侧看文字正向）
+  const zrings = [];
+  for (let i = 0; i < 8; i++) {
+    const uu = 0.42 + (0.10 - 0.42) * (i / 7);
+    const { P, U, V, r } = sleeveFrame(curve, uu);
+    const span = 0.80, ring = [];
+    for (let j = 0; j < 16; j++) {
+      const f = j / 15;
+      const th = side > 0 ? span * (1 - f) : -span + 2 * span * f;
+      ring.push(sleeveRing(P, U, V, r + 0.006, th));
+    }
+    zrings.push(ring);
+  }
+  const zkey = side > 0 ? 'sleeveR' : 'sleeveL';
+  const canvas = document.createElement('canvas'); canvas.width = 800; canvas.height = 920;
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  mesh.material = new THREE.MeshStandardMaterial({ map: tex, roughness: .94, metalness: 0 });
-  mesh.position.y = 0.40;
-  mesh.userData.zoneKey = side > 0 ? 'sleeveR' : 'sleeveL';
-  grp.add(mesh);
-
-  const key = mesh.userData.zoneKey;
-  zoneMeshes[key] = { mesh, canvas, ctx: canvas.getContext('2d'), tex, cfg: { W: 1024, H: 488, base: 150 } };
-  scene.add(grp);
+  const zmesh = new THREE.Mesh(loftGeometry(zrings, false), zoneMaterial(tex));
+  zmesh.userData.zoneKey = zkey;
+  scene.add(zmesh);
+  zoneMeshes[zkey] = { mesh: zmesh, canvas, ctx: canvas.getContext('2d'), tex, cfg: { W: 800, H: 920, base: 160 } };
 }
 buildSleeve(-1); // 左袖（-x）
 buildSleeve(1);  // 右袖（+x）
@@ -531,6 +721,7 @@ function redrawZone(key) {
   g.fillStyle = g.createPattern(noiseC, 'repeat');
   g.fillRect(0, 0, W, H);
   g.restore();
+  if (key === 'front') drawPocketSeams(g, state.color);
 
   const items = state.zones[key].items;
   for (const item of items) drawItem(g, item, z);
@@ -546,6 +737,24 @@ function redrawZone(key) {
 }
 function redrawAllZones() {
   for (const k in zoneMeshes) redrawZone(k);
+}
+
+/* 袋鼠兜缝线（画在面料上，随颜色自适应深浅） */
+function drawPocketSeams(g, color) {
+  const col = contrastFor(color);
+  g.save();
+  g.strokeStyle = col; g.lineJoin = 'round';
+  g.globalAlpha = 0.28; g.lineWidth = 5;
+  g.beginPath();
+  g.moveTo(196, 1128); g.lineTo(128, 1478);
+  g.moveTo(828, 1128); g.lineTo(896, 1478);
+  g.moveTo(196, 1128); g.lineTo(828, 1128);
+  g.stroke();
+  g.globalAlpha = 0.12; g.lineWidth = 11;
+  g.beginPath();
+  g.moveTo(196, 1140); g.lineTo(828, 1140);
+  g.stroke();
+  g.restore();
 }
 
 /* =========================================================
