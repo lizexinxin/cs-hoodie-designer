@@ -1,0 +1,1135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CS2 战队卫衣 3D 设计器</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: linear-gradient(160deg, #1a1c22 0%, #0c0d10 70%);
+    color: #e8e9ec;
+    overflow: hidden;
+  }
+  #app { display: flex; height: 100%; }
+
+  /* ---------- 3D 视口 ---------- */
+  #viewport { position: relative; flex: 1; min-width: 0; }
+  #viewport canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+  #viewport.placing canvas { cursor: crosshair; }
+
+  #hint {
+    position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    background: rgba(20,22,28,.85); border: 1px solid #4da3ff55; color: #cfe3ff;
+    padding: 8px 16px; border-radius: 20px; font-size: 13px; display: none;
+    backdrop-filter: blur(6px); pointer-events: none; white-space: nowrap;
+  }
+  #hint.show { display: block; }
+
+  #viewBtns {
+    position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 8px; align-items: center;
+  }
+  #viewBtns button {
+    background: rgba(24,26,32,.8); border: 1px solid #ffffff22; color: #cfd3da;
+    padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 13px;
+  }
+  #viewBtns button:hover { border-color: #4da3ff; color: #fff; }
+  #viewBtns label { font-size: 12px; color: #9aa0ab; display: flex; gap: 5px; align-items: center; cursor: pointer; }
+
+  #toast {
+    position: absolute; bottom: 70px; left: 50%; transform: translateX(-50%);
+    background: rgba(30,32,40,.95); padding: 10px 18px; border-radius: 10px;
+    font-size: 13px; color: #fff; opacity: 0; transition: opacity .25s; pointer-events: none;
+    max-width: 80%; text-align: center;
+  }
+  #toast.show { opacity: 1; }
+
+  /* ---------- 右侧面板 ---------- */
+  #panel {
+    width: 330px; flex-shrink: 0; background: #16171d; border-left: 1px solid #ffffff14;
+    overflow-y: auto; padding: 16px 16px 30px;
+  }
+  #panel::-webkit-scrollbar { width: 8px; }
+  #panel::-webkit-scrollbar-thumb { background: #33363f; border-radius: 4px; }
+  #panel h1 { font-size: 17px; margin-bottom: 2px; letter-spacing: .5px; }
+  #panel .sub { font-size: 11px; color: #8b919c; margin-bottom: 14px; }
+  #panel h3 {
+    font-size: 12px; color: #4da3ff; margin: 18px 0 8px; letter-spacing: 1px;
+    border-top: 1px solid #ffffff12; padding-top: 14px;
+  }
+  .btn {
+    background: #23252d; border: 1px solid #ffffff1c; color: #dfe2e8;
+    padding: 7px 12px; border-radius: 8px; cursor: pointer; font-size: 13px;
+  }
+  .btn:hover { border-color: #4da3ff; color: #fff; }
+  .btn.primary { background: #1d3a5e; border-color: #4da3ff66; }
+  .btn.danger { background: #46202a; border-color: #ff5c7a55; color: #ffb9c6; }
+  .btnrow { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+
+  .swatches { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .swatch {
+    width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
+    border: 2px solid #ffffff2a;
+  }
+  .swatch.active { border-color: #4da3ff; box-shadow: 0 0 0 2px #4da3ff44; }
+  input[type=color] { width: 34px; height: 30px; border: none; background: none; cursor: pointer; }
+
+  .team-row {
+    display: flex; align-items: center; gap: 9px; padding: 6px 8px;
+    border-radius: 8px; margin-bottom: 4px; background: #1c1e25;
+  }
+  .team-row img { width: 34px; height: 34px; border-radius: 6px; }
+  .team-row .tname { flex: 1; font-size: 13px; min-width: 0; }
+  .team-row .tname small { display: block; color: #7d828d; font-size: 10px; }
+  .team-row button { padding: 4px 8px; font-size: 11px; border-radius: 6px; }
+
+  .ctrl label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #aeb3bd; margin: 8px 0; }
+  .ctrl input[type=range] { flex: 1; accent-color: #4da3ff; }
+  .ctrl input[type=text], .ctrl select {
+    flex: 1; background: #22242c; border: 1px solid #ffffff1a; color: #e8e9ec;
+    padding: 6px 8px; border-radius: 6px; font-size: 13px;
+  }
+  .ctrl .chk { cursor: pointer; }
+
+  #selPanel { background: #1d2430; border: 1px solid #4da3ff44; border-radius: 10px; padding: 10px 12px; }
+  #selPanel[hidden] { display: none; }
+  #selType { font-size: 12px; color: #4da3ff; margin-bottom: 4px; }
+
+  .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .preset-grid .btn { text-align: left; line-height: 1.35; }
+  .preset-grid .btn b { display: block; font-size: 13px; }
+  .preset-grid .btn small { color: #8b919c; font-size: 10px; }
+
+  .tips { font-size: 11px; color: #767c87; line-height: 1.8; }
+  .legal { font-size: 10px; color: #5d626c; margin-top: 16px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="viewport">
+    <div id="hint"></div>
+    <div id="viewBtns">
+      <button data-view="front">正面</button>
+      <button data-view="back">背面</button>
+      <button data-view="left">左袖</button>
+      <button data-view="right">右袖</button>
+      <label><input type="checkbox" id="autoRot" checked> 自动旋转</label>
+    </div>
+    <div id="toast"></div>
+  </div>
+
+  <aside id="panel">
+    <h1>CS2 战队卫衣设计器</h1>
+    <div class="sub">3D 实时预览 · 拖拽排版 · 导出高清 PNG</div>
+
+    <h3>① 卫衣颜色</h3>
+    <div class="swatches" id="swatches"></div>
+
+    <h3>② 队徽库（点击放置到卫衣）</h3>
+    <div id="teamList"></div>
+    <div class="btnrow">
+      <button class="btn" id="btnClearZones">清空全部图案</button>
+    </div>
+
+    <h3>③ 选中元素</h3>
+    <div id="selPanel" hidden>
+      <div id="selType"></div>
+      <div class="ctrl">
+        <label>大小 <input type="range" id="selScale" min="30" max="300" value="100"></label>
+        <label>旋转 <input type="range" id="selRot" min="-180" max="180" value="0"></label>
+      </div>
+      <div class="ctrl" id="textCtrls">
+        <label>内容 <input type="text" id="selText" maxlength="40"></label>
+        <label>颜色 <input type="color" id="selColor" value="#ffffff"></label>
+        <label class="chk"><input type="checkbox" id="selStroke"> 自动描边（浅色衣服更清晰）</label>
+      </div>
+      <div class="ctrl" id="logoCtrls">
+        <label class="chk"><input type="checkbox" id="selFlip"> 镜像翻转</label>
+      </div>
+      <div class="btnrow">
+        <button class="btn" id="btnTop">置顶</button>
+        <button class="btn" id="btnUp">上移</button>
+        <button class="btn" id="btnDown">下移</button>
+        <button class="btn danger" id="btnDel">删除</button>
+      </div>
+    </div>
+    <div class="tips" id="selEmpty" style="margin-top:6px;">点击卫衣上的徽章/文字即可选中，拖动可移动位置。</div>
+
+    <h3>④ 自定义文字</h3>
+    <div class="ctrl">
+      <label>内容 <input type="text" id="customText" value="CS2 ALL-STARS" maxlength="30"></label>
+    </div>
+    <div class="btnrow">
+      <button class="btn" id="btnTextFront">加到正面</button>
+      <button class="btn" id="btnTextBack">加到背面</button>
+      <button class="btn" id="btnTextSel">加到选中处</button>
+    </div>
+
+    <h3>⑤ 一键排版预设</h3>
+    <div class="preset-grid">
+      <button class="btn" data-preset="A"><b>A · 前胸荣誉墙</b><small>2×5 网格 + 大标题</small></button>
+      <button class="btn" data-preset="B"><b>B · 背面环绕</b><small>CS2 大字 + 9 队弧形环绕</small></button>
+      <button class="btn" data-preset="C"><b>C · 前小后大</b><small>左胸小徽 + 背面 3×3</small></button>
+      <button class="btn" data-preset="D"><b>D · 斜向色带</b><small>斜线排列 · 电竞街头风</small></button>
+    </div>
+
+    <h3>⑥ 导出</h3>
+    <div class="btnrow">
+      <button class="btn primary" id="btnExpF">导出正面 PNG</button>
+      <button class="btn primary" id="btnExpB">导出背面 PNG</button>
+      <button class="btn" id="btnExpL">导出左侧</button>
+      <button class="btn" id="btnExpR">导出右侧</button>
+    </div>
+    <div class="tips" style="margin-top:6px;">设计会自动保存在浏览器本地；拖一张 PNG 图片进窗口 = 替换当前选中徽章的图。</div>
+
+    <h3>⑦ 操作说明</h3>
+    <div class="tips">
+      拖动空白处 = 旋转视角 · 滚轮/双指 = 缩放<br>
+      点击队徽行的「放置」→ 再点卫衣上的位置<br>
+      点击已放置的徽章 = 选中（可拖动/缩放/旋转）<br>
+      Delete 键删除选中元素 · Esc 取消/取消选中
+    </div>
+    <div class="legal">⚠️ 各战队 logo 为其商标，本工具仅供个人定制自穿参考，请勿商用。</div>
+  </aside>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* =========================================================
+   数据：10 支战队（简化队徽 = 配色 + 形状 + 缩写，可上传官方图替换）
+========================================================= */
+const TEAMS = [
+  { id:'mouz',    name:'MOUZ',          abbr:'MOUZ',    bg:'#C8102E', fg:'#FFFFFF', accent:'#123F8F', shape:'shield' },
+  { id:'furia',   name:'FURIA Esports', abbr:'FURIA',   bg:'#151515', fg:'#FFFFFF', accent:'#8DC63F', shape:'hex'    },
+  { id:'vitality',name:'Team Vitality', abbr:'VITALITY',bg:'#FFD400', fg:'#151515', accent:'#151515', shape:'circle' },
+  { id:'spirit',  name:'Team Spirit',   abbr:'SPIRIT',  bg:'#1E3FAE', fg:'#FFD800', accent:'#FFD800', shape:'shield' },
+  { id:'bb',      name:'BetBoom Team',  abbr:'BB',      bg:'#1240CE', fg:'#FFFFFF', accent:'#FFB800', shape:'circle' },
+  { id:'falcons', name:'Team Falcons',  abbr:'FALCONS', bg:'#00843D', fg:'#FFFFFF', accent:'#FFD100', shape:'hex'    },
+  { id:'navi',    name:'Natus Vincere', abbr:'NAVI',    bg:'#FFE500', fg:'#141414', accent:'#141414', shape:'shield' },
+  { id:'mongolz', name:'The MongolZ',   abbr:'MONGOLZ', bg:'#1D2E6E', fg:'#FFFFFF', accent:'#E4322B', shape:'hex'    },
+  { id:'g2',      name:'G2 Esports',    abbr:'G2',      bg:'#E4032E', fg:'#FFFFFF', accent:'#141414', shape:'shield' },
+  { id:'tyloo',   name:'TYLOO',         abbr:'TYLOO',   bg:'#EA4A24', fg:'#FFFFFF', accent:'#5E1604', shape:'circle' },
+];
+const teamById = id => TEAMS.find(t => t.id === id);
+
+/* 简化队徽生成（缓存） */
+const badgeCache = {};
+function fitFont(g, text, maxW, start) {
+  let s = start;
+  while (s > 18) {
+    g.font = `900 ${s}px "Arial Black", Impact, sans-serif`;
+    if (g.measureText(text).width <= maxW) break;
+    s -= 3;
+  }
+  return s;
+}
+function badgeCanvas(team) {
+  if (badgeCache[team.id]) return badgeCache[team.id];
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.beginPath();
+  if (team.shape === 'circle') {
+    g.arc(128, 128, 116, 0, Math.PI * 2);
+  } else if (team.shape === 'hex') {
+    for (let i = 0; i < 6; i++) {
+      const a = Math.PI / 6 + i * Math.PI / 3;
+      const x = 128 + 118 * Math.cos(a), y = 128 + 118 * Math.sin(a);
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    }
+    g.closePath();
+  } else { // shield
+    g.moveTo(22, 30);
+    g.quadraticCurveTo(128, 2, 234, 30);
+    g.lineTo(226, 132);
+    g.quadraticCurveTo(212, 202, 128, 244);
+    g.quadraticCurveTo(44, 202, 30, 132);
+    g.closePath();
+  }
+  g.fillStyle = team.bg; g.fill();
+  g.lineWidth = 10; g.strokeStyle = team.accent; g.stroke();
+  g.save(); g.clip();
+  g.globalAlpha = .3; g.fillStyle = team.accent;
+  g.fillRect(0, 188, 256, 68);
+  g.restore();
+  const fs = fitFont(g, team.abbr, 170, team.abbr.length <= 3 ? 92 : 62);
+  g.font = `900 ${fs}px "Arial Black", Impact, sans-serif`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = team.fg;
+  g.fillText(team.abbr, 128, 116);
+  badgeCache[team.id] = c;
+  return c;
+}
+
+/* 已上传官方图 */
+const uploads = {}; // id -> {data, img}
+
+/* =========================================================
+   状态
+========================================================= */
+const state = {
+  color: '#181A20',
+  zones: {
+    front:   { items: [] },
+    back:    { items: [] },
+    sleeveL: { items: [] },
+    sleeveR: { items: [] },
+  },
+};
+let selected = null;          // {zone, item}
+let placingTeam = null;       // 放置模式中的队伍 id
+let exporting = false;
+
+/* =========================================================
+   three.js 场景
+========================================================= */
+const container = document.getElementById('viewport');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x2c2e36, 1.15));
+const key = new THREE.DirectionalLight(0xffffff, 1.8); key.position.set(2.6, 4.2, 3.2); scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff, 0.55); fill.position.set(-3.2, 2, 1.5); scene.add(fill);
+const rim = new THREE.DirectionalLight(0xdfe8ff, 1.0); rim.position.set(0, 3, -4.5); scene.add(rim);
+
+/* 地面软阴影 */
+{
+  const sc = document.createElement('canvas'); sc.width = sc.height = 256;
+  const sg = sc.getContext('2d');
+  const grd = sg.createRadialGradient(128, 128, 12, 128, 128, 128);
+  grd.addColorStop(0, 'rgba(0,0,0,.42)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
+  sg.fillStyle = grd; sg.fillRect(0, 0, 256, 256);
+  const tex = new THREE.CanvasTexture(sc);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 3.6),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2; m.position.y = -1.04;
+  scene.add(m);
+}
+
+/* 面料噪点 */
+const noiseC = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 180;
+  const g = c.getContext('2d');
+  const id = g.createImageData(180, 180);
+  for (let i = 0; i < id.data.length; i += 4) {
+    const v = 190 + (Math.random() * 65 | 0);
+    id.data[i] = id.data[i + 1] = id.data[i + 2] = v; id.data[i + 3] = 255;
+  }
+  g.putImageData(id, 0, 0);
+  return c;
+})();
+
+/* 普通面料材质（随衣服颜色更新） */
+const plainMats = [];
+function fabricMat(darken = 0) {
+  const m = new THREE.MeshStandardMaterial({ roughness: .93, metalness: 0 });
+  m.userData.darken = darken;
+  plainMats.push(m);
+  return m;
+}
+function applyFabricColor() {
+  const base = new THREE.Color(state.color);
+  for (const m of plainMats) {
+    const c = base.clone();
+    if (m.userData.darken) c.lerp(new THREE.Color('#000000'), m.userData.darken);
+    m.color.copy(c);
+  }
+  redrawAllZones();
+}
+
+/* ---------- 印花区域（Zone）：每个区域一张 canvas 纹理 ---------- */
+
+const zoneMeshes = {};
+function buildZone(key, cfg) {
+  const canvas = document.createElement('canvas');
+  canvas.width = cfg.W; canvas.height = cfg.H;
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const mesh = new THREE.Mesh(cfg.geo, new THREE.MeshStandardMaterial({
+    map: tex, roughness: .94, metalness: 0,
+  }));
+  if (cfg.mirror) mirrorGeometry(cfg.geo);
+  mesh.position.set(cfg.x || 0, cfg.y, cfg.z || 0);
+  if (cfg.sz) mesh.scale.z = cfg.sz;
+  mesh.userData.zoneKey = key;
+  scene.add(mesh);
+  zoneMeshes[key] = { mesh, canvas, ctx: canvas.getContext('2d'), tex, cfg };
+}
+
+const FRONT_THETA = 0.85;
+/* 躯干（纯色） */
+{
+  const torso = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.42, 0.54, 1.35, 64, 1, false),
+    fabricMat(0));
+  torso.position.y = -0.125; torso.scale.z = 0.78;
+  scene.add(torso);
+}
+/* 下摆罗纹 */
+{
+  const hem = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.545, 0.555, 0.16, 64, 1, true),
+    fabricMat(0.16));
+  hem.material.side = THREE.DoubleSide;
+  hem.position.y = -0.86; hem.scale.z = 0.78;
+  scene.add(hem);
+}
+/* 袋鼠兜（只微微凸出，保证不遮住下摆区的印花） */
+{
+  const pocket = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.5047, 0.5376, 0.36, 64, 1, true, -0.72, 1.44),
+    fabricMat(0.09));
+  pocket.material.side = THREE.DoubleSide;
+  pocket.position.y = -0.56; pocket.scale.z = 0.78;
+  scene.add(pocket);
+}
+/* 帽子（翻搭在肩后的领圈，开口朝前下） */
+{
+  const hood = new THREE.Mesh(
+    new THREE.TorusGeometry(0.20, 0.165, 18, 48),
+    fabricMat(0.06));
+  hood.material.side = THREE.DoubleSide;
+  hood.rotation.x = Math.PI / 2 - 0.45;
+  hood.position.set(0, 0.545, -0.11);
+  hood.scale.set(1.16, 0.88, 1.0);
+  scene.add(hood);
+}
+/* 领口阴影 */
+{
+  const neck = new THREE.Mesh(new THREE.CircleGeometry(0.30, 32),
+    new THREE.MeshBasicMaterial({ color: '#08090c' }));
+  neck.rotation.x = -Math.PI / 2 + 0.30;
+  neck.position.set(0, 0.565, 0.05);
+  scene.add(neck);
+}
+/* 帽绳 */
+for (const sx of [-1, 1]) {
+  const grp = new THREE.Group();
+  const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.26, 8),
+    new THREE.MeshStandardMaterial({ color: '#d8d5cc', roughness: .8 }));
+  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.035, 8),
+    new THREE.MeshStandardMaterial({ color: '#8d8a82', roughness: .5, metalness: .6 }));
+  rope.position.y = -0.13; tip.position.y = -0.275;
+  grp.add(rope, tip);
+  grp.position.set(0.095 * sx, 0.40, 0.345);
+  grp.rotation.z = -0.08 * sx;
+  scene.add(grp);
+}
+
+/* 正 / 背印花区（锥度与躯干一致，整体外扩 0.006，避免陷入衣服） */
+buildZone('front', {
+  W: 1024, H: 1520, base: 210, y: -0.155, sz: 0.78,
+  geo: new THREE.CylinderGeometry(0.4345, 0.5429, 1.22, 64, 1, true, -FRONT_THETA, FRONT_THETA * 2),
+});
+buildZone('back', {
+  W: 1024, H: 1520, base: 210, y: -0.155, sz: 0.78,
+  geo: new THREE.CylinderGeometry(0.4345, 0.5429, 1.22, 64, 1, true, Math.PI - FRONT_THETA, FRONT_THETA * 2),
+});
+
+/* 袖子 + 袖印花区（接缝藏在身体内侧） */
+function buildSleeve(side) {
+  const grp = new THREE.Group();
+  grp.position.set(0.56 * side, 0.48, -0.02);
+  const dir = new THREE.Vector3(0.14 * side, -1, -0.06).normalize();
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  grp.quaternion.copy(q);
+
+  // 圆柱 radiusTop 在局部 +y 端；本组局部 +y 指向袖口方向
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.175, 0.215, 1.05, 32), fabricMat(0));
+  arm.position.y = 0.45;
+  const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.170, 0.166, 0.15, 32), fabricMat(0.16));
+  cuff.position.y = 0.97;
+  grp.add(arm, cuff);
+
+  // 接缝朝身体内侧、画布中心(u=0.5)朝袖子外侧：由 thetaIn 推算
+  const inwardLocal = new THREE.Vector3(-side, 0, 0).applyQuaternion(q.clone().invert());
+  const thetaIn = Math.atan2(inwardLocal.x, inwardLocal.z);
+  const geo = new THREE.CylinderGeometry(0.193, 0.2167, 0.62, 48, 1, true, thetaIn, Math.PI * 2);
+  const mesh = new THREE.Mesh(geo, null);
+  const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 488;
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  mesh.material = new THREE.MeshStandardMaterial({ map: tex, roughness: .94, metalness: 0 });
+  mesh.position.y = 0.40;
+  mesh.userData.zoneKey = side > 0 ? 'sleeveR' : 'sleeveL';
+  grp.add(mesh);
+
+  const key = mesh.userData.zoneKey;
+  zoneMeshes[key] = { mesh, canvas, ctx: canvas.getContext('2d'), tex, cfg: { W: 1024, H: 488, base: 150 } };
+  scene.add(grp);
+}
+buildSleeve(-1); // 左袖（-x）
+buildSleeve(1);  // 右袖（+x）
+
+/* =========================================================
+   Zone 绘制
+========================================================= */
+function lumOf(hex) {
+  const c = new THREE.Color(hex);
+  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+}
+function contrastFor(hex) {
+  return lumOf(hex) > 0.30 ? '#141414' : '#FFFFFF';
+}
+
+function resolveImg(teamId) {
+  const up = uploads[teamId];
+  if (up && up.img) return up.img;
+  return badgeCanvas(teamById(teamId));
+}
+
+function drawItem(g, item, zone) {
+  g.save();
+  g.translate(item.x, item.y);
+  g.rotate(item.rot * Math.PI / 180);
+  if (item.type === 'logo') {
+    const img = resolveImg(item.teamId);
+    if (!img) { g.restore(); return; }
+    const w = zone.cfg.base * item.scale;
+    const h = w * img.height / img.width;
+    if (item.flip) g.scale(-1, 1);
+    g.drawImage(img, -w / 2, -h / 2, w, h);
+    item._hw = w / 2; item._hh = h / 2;
+  } else {
+    const size = item.size * item.scale;
+    g.font = `900 ${size}px "Arial Black", Impact, "PingFang SC", sans-serif`;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    if (item.stroke) {
+      g.lineWidth = size * 0.10; g.lineJoin = 'round';
+      g.strokeStyle = contrastFor(state.color);
+      g.strokeText(item.text, 0, 0);
+    }
+    g.fillStyle = item.color === 'auto' ? contrastFor(state.color) : item.color;
+    g.fillText(item.text, 0, 0);
+    item._hw = g.measureText(item.text).width / 2;
+    item._hh = size * 0.62;
+  }
+  g.restore();
+}
+
+function redrawZone(key) {
+  const z = zoneMeshes[key], g = z.ctx;
+  const { W, H } = z.cfg;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = state.color; g.fillRect(0, 0, W, H);
+  g.save();
+  g.globalAlpha = 0.03;
+  g.fillStyle = g.createPattern(noiseC, 'repeat');
+  g.fillRect(0, 0, W, H);
+  g.restore();
+
+  const items = state.zones[key].items;
+  for (const item of items) drawItem(g, item, z);
+
+  if (selected && selected.zone === key && !exporting) {
+    const it = selected.item;
+    g.save();
+    g.strokeStyle = '#4da3ff'; g.lineWidth = 4; g.setLineDash([12, 9]);
+    g.strokeRect(it.x - it._hw - 10, it.y - it._hh - 10, (it._hw + 10) * 2, (it._hh + 10) * 2);
+    g.restore();
+  }
+  z.tex.needsUpdate = true;
+}
+function redrawAllZones() {
+  for (const k in zoneMeshes) redrawZone(k);
+}
+
+/* =========================================================
+   相机控制（自写轨道，带阻尼）
+========================================================= */
+const orbit = {
+  az: 0, pol: 1.30, radius: 3.7,
+  tAz: 0, tPol: 1.30, tRadius: 3.7,
+};
+function updateCamera() {
+  const { az, pol, radius } = orbit;
+  camera.position.set(
+    radius * Math.sin(pol) * Math.sin(az),
+    radius * Math.cos(pol) - 0.05,
+    radius * Math.sin(pol) * Math.cos(az));
+  camera.lookAt(0, -0.05, 0);
+}
+const VIEW_PRESETS = {
+  front: { az: 0, pol: 1.30 },
+  back:  { az: Math.PI, pol: 1.30 },
+  left:  { az: -Math.PI / 2, pol: 1.35 },
+  right: { az: Math.PI / 2, pol: 1.35 },
+};
+
+/* =========================================================
+   交互：拾取 / 放置 / 拖动 / 旋转
+========================================================= */
+const raycaster = new THREE.Raycaster();
+const pointerNDC = new THREE.Vector2();
+const hitTargets = Object.values(zoneMeshes).map(z => z.mesh);
+
+function pickZone(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNDC, camera);
+  const hits = raycaster.intersectObjects(hitTargets, false);
+  if (!hits.length) return null;
+  const h = hits[0];
+  const key = h.object.userData.zoneKey;
+  const z = zoneMeshes[key];
+  return {
+    key, z,
+    px: h.uv.x * z.cfg.W,
+    py: (1 - h.uv.y) * z.cfg.H,
+  };
+}
+function hitItem(zoneKey, px, py) {
+  const items = state.zones[zoneKey].items;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    const hw = Math.max((it._hw || 60) * 1.12 + 12, 40);
+    const hh = Math.max((it._hh || 60) * 1.12 + 12, 40);
+    if (Math.abs(px - it.x) <= hw && Math.abs(py - it.y) <= hh) return it;
+  }
+  return null;
+}
+
+let drag = null;    // {zone, item, dx, dy}
+let rotating = false;
+let pinch = null;
+const activePtrs = new Map();
+
+renderer.domElement.addEventListener('pointerdown', e => {
+  renderer.domElement.setPointerCapture(e.pointerId);
+  activePtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (activePtrs.size === 2) {
+    const [a, b] = [...activePtrs.values()];
+    pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y), radius: orbit.tRadius };
+    drag = null; rotating = false;
+    return;
+  }
+  const hit = pickZone(e.clientX, e.clientY);
+  if (hit) {
+    const item = hitItem(hit.key, hit.px, hit.py);
+    if (item) {
+      setPlacing(null);
+      select(hit.key, item);
+      drag = { item, zoneKey: hit.key, dx: hit.px - item.x, dy: hit.py - item.y };
+      return;
+    }
+    if (placingTeam) { placeLogo(placingTeam, hit.key, hit.px, hit.py); return; }
+  }
+  select(null);
+  rotating = true;
+});
+
+renderer.domElement.addEventListener('pointermove', e => {
+  const prev = activePtrs.get(e.pointerId);
+  if (prev) activePtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch && activePtrs.size === 2) {
+    const [a, b] = [...activePtrs.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    orbit.tRadius = THREE.MathUtils.clamp(pinch.radius * pinch.dist / Math.max(d, 20), 1.8, 7);
+    return;
+  }
+  if (drag) {
+    const hit = pickZone(e.clientX, e.clientY);
+    if (hit) {
+      if (drag.zoneKey !== hit.key) redrawZone(drag.zoneKey);
+      drag.zoneKey = hit.key;
+      drag.item.x = hit.px - drag.dx;
+      drag.item.y = hit.py - drag.dy;
+      redrawZone(hit.key);
+      scheduleSave();
+    }
+    return;
+  }
+  if (rotating && prev) {
+    orbit.tAz -= (e.clientX - prev.x) * 0.0052;
+    orbit.tPol = THREE.MathUtils.clamp(orbit.tPol - (e.clientY - prev.y) * 0.0052, 0.4, 2.5);
+  }
+});
+
+function endPointer(e) {
+  activePtrs.delete(e.pointerId);
+  if (activePtrs.size < 2) pinch = null;
+  if (drag) { drag = null; scheduleSave(); }
+  rotating = false;
+}
+renderer.domElement.addEventListener('pointerup', endPointer);
+renderer.domElement.addEventListener('pointercancel', endPointer);
+
+renderer.domElement.addEventListener('wheel', e => {
+  e.preventDefault();
+  orbit.tRadius = THREE.MathUtils.clamp(orbit.tRadius * (1 + e.deltaY * 0.0011), 1.8, 7);
+}, { passive: false });
+
+/* =========================================================
+   选择 / 放置 / 元素操作
+========================================================= */
+function select(zoneKey, item) {
+  const prev = selected;
+  selected = item ? { zone: zoneKey, item } : null;
+  if (prev) redrawZone(prev.zone);
+  if (selected) redrawZone(selected.zone);
+  syncSelPanel();
+}
+function placeLogo(teamId, zoneKey, px, py) {
+  const item = { type: 'logo', teamId, x: px, y: py, scale: 1, rot: 0, flip: false };
+  state.zones[zoneKey].items.push(item);
+  setPlacing(null);
+  select(zoneKey, item);
+  redrawZone(zoneKey);
+  scheduleSave();
+  toast(`已放置 ${teamById(teamId).name}，拖动可调整位置`);
+}
+function setPlacing(teamId) {
+  placingTeam = teamId;
+  document.getElementById('viewport').classList.toggle('placing', !!teamId);
+  const hint = document.getElementById('hint');
+  if (teamId) {
+    hint.textContent = `在卫衣上点击放置 ${teamById(teamId).name}（Esc 取消）`;
+    hint.classList.add('show');
+  } else hint.classList.remove('show');
+  document.querySelectorAll('#teamList button[data-act=place]').forEach(b => {
+    b.textContent = b.dataset.team === teamId ? '点击卫衣…' : '放置';
+    b.classList.toggle('primary', b.dataset.team === teamId);
+  });
+}
+
+const $ = s => document.querySelector(s);
+const selPanel = $('#selPanel'), selEmpty = $('#selEmpty');
+function syncSelPanel() {
+  if (!selected) {
+    selPanel.hidden = true; selEmpty.style.display = '';
+    return;
+  }
+  selPanel.hidden = false; selEmpty.style.display = 'none';
+  const it = selected.item;
+  $('#selType').textContent = it.type === 'logo'
+    ? `徽章 · ${teamById(it.teamId).name} · ${selected.zone === 'front' ? '正面' : selected.zone === 'back' ? '背面' : '袖子'}`
+    : `文字 · ${selected.zone === 'front' ? '正面' : selected.zone === 'back' ? '背面' : '袖子'}`;
+  $('#selScale').value = Math.round(it.scale * 100);
+  $('#selRot').value = Math.round(it.rot);
+  $('#textCtrls').style.display = it.type === 'text' ? '' : 'none';
+  $('#logoCtrls').style.display = it.type === 'logo' ? '' : 'none';
+  if (it.type === 'text') {
+    $('#selText').value = it.text;
+    $('#selColor').value = it.color === 'auto' ? contrastFor(state.color) : it.color;
+    $('#selStroke').checked = !!it.stroke;
+  } else {
+    $('#selFlip').checked = !!it.flip;
+  }
+}
+
+$('#selScale').addEventListener('input', e => {
+  if (!selected) return;
+  selected.item.scale = e.target.value / 100;
+  redrawZone(selected.zone); scheduleSave();
+});
+$('#selRot').addEventListener('input', e => {
+  if (!selected) return;
+  selected.item.rot = +e.target.value;
+  redrawZone(selected.zone); scheduleSave();
+});
+$('#selText').addEventListener('input', e => {
+  if (!selected || selected.item.type !== 'text') return;
+  selected.item.text = e.target.value || ' ';
+  redrawZone(selected.zone); scheduleSave();
+});
+$('#selColor').addEventListener('input', e => {
+  if (!selected || selected.item.type !== 'text') return;
+  selected.item.color = e.target.value;
+  redrawZone(selected.zone); scheduleSave();
+});
+$('#selStroke').addEventListener('change', e => {
+  if (!selected || selected.item.type !== 'text') return;
+  selected.item.stroke = e.target.checked;
+  redrawZone(selected.zone); scheduleSave();
+});
+$('#selFlip').addEventListener('change', e => {
+  if (!selected || selected.item.type !== 'logo') return;
+  selected.item.flip = e.target.checked;
+  redrawZone(selected.zone); scheduleSave();
+});
+$('#btnDel').addEventListener('click', deleteSelected);
+$('#btnTop').addEventListener('click', () => reorder(1e9));
+$('#btnUp').addEventListener('click', () => reorder(1));
+$('#btnDown').addEventListener('click', () => reorder(-1));
+function reorder(delta) {
+  if (!selected) return;
+  const arr = state.zones[selected.zone].items;
+  const i = arr.indexOf(selected.item);
+  const j = THREE.MathUtils.clamp(delta === 1e9 ? arr.length - 1 : i + delta, 0, arr.length - 1);
+  arr.splice(j, 0, arr.splice(i, 1)[0]);
+  redrawZone(selected.zone); scheduleSave();
+}
+function deleteSelected() {
+  if (!selected) return;
+  const { zone, item } = selected;
+  const arr = state.zones[zone].items;
+  arr.splice(arr.indexOf(item), 1);
+  select(null);
+  redrawZone(zone); scheduleSave();
+}
+
+document.addEventListener('keydown', e => {
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+  if (e.key === 'Escape') { setPlacing(null); select(null); }
+  if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
+});
+
+/* =========================================================
+   UI：颜色 / 队徽列表 / 文字 / 预设 / 导出
+========================================================= */
+const GARMENT_COLORS = [
+  ['#181A20', '黑'], ['#2B2F36', '炭灰'], ['#E9E7E0', '米白'], ['#8A8F98', '浅灰'],
+  ['#1E2A44', '藏青'], ['#4A1420', '酒红'], ['#14342A', '墨绿'], ['#3B2A18', '咖'],
+];
+{
+  const box = $('#swatches');
+  for (const [c, name] of GARMENT_COLORS) {
+    const d = document.createElement('div');
+    d.className = 'swatch'; d.style.background = c; d.title = name; d.dataset.c = c;
+    d.addEventListener('click', () => setColor(c));
+    box.appendChild(d);
+  }
+  const inp = document.createElement('input');
+  inp.type = 'color'; inp.value = '#181A20'; inp.title = '自定义颜色';
+  inp.addEventListener('input', () => setColor(inp.value));
+  box.appendChild(inp);
+}
+function setColor(c) {
+  state.color = c;
+  document.querySelectorAll('.swatch').forEach(s => s.classList.toggle('active', s.dataset.c === c));
+  applyFabricColor();
+  scheduleSave();
+}
+
+/* 队徽列表 */
+{
+  const list = $('#teamList');
+  for (const t of TEAMS) {
+    const row = document.createElement('div');
+    row.className = 'team-row';
+    const img = document.createElement('img');
+    img.dataset.tid = t.id;
+    row.appendChild(img);
+    const name = document.createElement('div');
+    name.className = 'tname';
+    name.innerHTML = `${t.name}<small>${t.id}</small>`;
+    row.appendChild(name);
+    const b1 = document.createElement('button');
+    b1.className = 'btn'; b1.dataset.act = 'place'; b1.dataset.team = t.id; b1.textContent = '放置';
+    b1.addEventListener('click', () => setPlacing(placingTeam === t.id ? null : t.id));
+    row.appendChild(b1);
+    const b2 = document.createElement('button');
+    b2.className = 'btn'; b2.textContent = '传图';
+    b2.title = '上传该战队的官方 logo PNG（透明底最佳）';
+    b2.addEventListener('click', () => uploadFor(t.id));
+    row.appendChild(b2);
+    list.appendChild(row);
+  }
+}
+function refreshThumbs() {
+  document.querySelectorAll('#teamList img').forEach(img => {
+    const t = teamById(img.dataset.tid);
+    img.src = (uploads[t.id] && uploads[t.id].data) || badgeCanvas(t).toDataURL();
+  });
+}
+
+/* 上传官方 logo */
+let uploadTarget = null;
+const fileInput = document.createElement('input');
+fileInput.type = 'file'; fileInput.accept = 'image/*';
+fileInput.addEventListener('change', () => {
+  const f = fileInput.files[0];
+  if (f && uploadTarget) readFileToUpload(f, uploadTarget);
+  fileInput.value = '';
+});
+function uploadFor(teamId) { uploadTarget = teamId; fileInput.click(); }
+function readFileToUpload(f, teamId, cb) {
+  const r = new FileReader();
+  r.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      uploads[teamId] = { data: r.result, img };
+      redrawAllZones(); refreshThumbs(); scheduleSave();
+      toast(`已替换 ${teamById(teamId).name} 的队徽图`);
+      cb && cb();
+    };
+    img.src = r.result;
+  };
+  r.readAsDataURL(f);
+}
+/* 拖图片进窗口 = 替换选中徽章 */
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (!f || !f.type.startsWith('image/')) return;
+  if (selected && selected.item.type === 'logo') readFileToUpload(f, selected.item.teamId);
+  else toast('请先在卫衣上点选一个徽章，再拖入图片替换它');
+});
+
+/* 自定义文字 */
+function addText(zoneKey) {
+  const str = $('#customText').value.trim() || 'CS2';
+  const z = zoneMeshes[zoneKey].cfg;
+  const item = { type: 'text', text: str, size: zoneKey.startsWith('sleeve') ? 110 : 130, scale: 1, rot: 0, color: 'auto', stroke: false, x: z.W / 2, y: z.H / 2 };
+  state.zones[zoneKey].items.push(item);
+  select(zoneKey, item);
+  redrawZone(zoneKey); scheduleSave();
+}
+$('#btnTextFront').addEventListener('click', () => addText('front'));
+$('#btnTextBack').addEventListener('click', () => addText('back'));
+$('#btnTextSel').addEventListener('click', () => {
+  if (selected) addText(selected.zone);
+  else toast('先选中一个位置：点击卫衣上任意徽章，或直接用「加到正面/背面」');
+});
+$('#btnClearZones').addEventListener('click', () => {
+  if (!confirm('清空所有印花（徽章和文字）？')) return;
+  for (const k in state.zones) state.zones[k].items = [];
+  select(null);
+  redrawAllZones(); scheduleSave();
+});
+
+/* ---------- 排版预设 ---------- */
+function mkText(text, zoneW, opt = {}) {
+  return { type: 'text', text, size: opt.size || 120, scale: 1, rot: opt.rot || 0, color: opt.color || 'auto', stroke: !!opt.stroke, x: opt.x ?? zoneW / 2, y: opt.y ?? 200 };
+}
+function mkLogo(teamId, x, y, scale = 1, rot = 0) {
+  return { type: 'logo', teamId, x, y, scale, rot, flip: false };
+}
+const PRESETS = {
+  A() { // 前胸荣誉墙：大标题 + 2×5 网格（徽章 + 队名）
+    const items = [mkText('CS2 ALL-STARS', 1024, { size: 116, y: 150 })];
+    const cols = [300, 724], startY = 332, rowH = 224;
+    TEAMS.forEach((t, i) => {
+      const x = cols[i % 2], y = startY + Math.floor(i / 2) * rowH;
+      items.push(mkLogo(t.id, x, y, 0.92));
+      items.push(mkText(t.name.toUpperCase(), 1024, { size: 26, x, y: y + 108 }));
+    });
+    return { front: items, back: [] };
+  },
+  B() { // 背面环绕：CS2 大字 + 9 队弧形 + 收尾
+    const items = [
+      mkText('CS2', 1024, { size: 300, y: 560 }),
+      mkText('ALL-STARS', 1024, { size: 104, y: 776 }),
+    ];
+    const cx = 512, cy = 700, R = 440;
+    const nine = TEAMS.slice(0, 9);
+    nine.forEach((t, i) => {
+      const ang = (-155 + i * (130 / 8)) * Math.PI / 180;
+      items.push(mkLogo(t.id, cx + R * Math.cos(ang), cy + R * Math.sin(ang), 0.74, ang * 180 / Math.PI + 90));
+    });
+    items.push(mkLogo(TEAMS[9].id, 512, 1348, 0.86));
+    return { front: [], back: items };
+  },
+  C() { // 前小后大：左胸小徽 + 背面 3×3 + 压轴
+    const front = [
+      mkLogo(TEAMS[0].id, 285, 330, 0.60),
+      mkText(TEAMS[0].name.toUpperCase(), 1024, { size: 24, x: 285, y: 415 }),
+      mkText('CS2', 1024, { size: 52, x: 770, y: 330 }),
+    ];
+    const back = [mkText('CS2 ALL-STARS', 1024, { size: 122, y: 152 })];
+    const cols = [215, 512, 819], rows = [412, 700, 988];
+    TEAMS.slice(0, 9).forEach((t, i) => {
+      const x = cols[i % 3], y = rows[Math.floor(i / 3)];
+      back.push(mkLogo(t.id, x, y, 0.88));
+      back.push(mkText(t.name.toUpperCase(), 1024, { size: 22, x, y: y + 100 }));
+    });
+    back.push(mkLogo(TEAMS[9].id, 512, 1268, 0.92));
+    back.push(mkText(TEAMS[9].name.toUpperCase(), 1024, { size: 24, x: 512, y: 1372 }));
+    return { front, back };
+  },
+  D() { // 斜向色带（电竞街头风）+ 背面错落
+    const front = [];
+    TEAMS.forEach((t, i) => {
+      const x = 150 + i * 80.4, y = 268 + i * 112;
+      front.push(mkLogo(t.id, x, y, 0.80, -36));
+    });
+    const back = [
+      mkText('ALL-STARS', 1024, { size: 150, y: 260 }),
+      mkText('10 TEAMS · ONE HOODIE', 1024, { size: 40, y: 388 }),
+    ];
+    const rows = [[210, 640, 4], [360, 930, 3], [280, 1220, 3]];
+    let idx = 0;
+    for (const [x0, y, n] of rows) {
+      for (let j = 0; j < n; j++) {
+        const t = TEAMS[idx++];
+        back.push(mkLogo(t.id, x0 + j * 190, y, 0.72, (idx % 2 ? 7 : -7)));
+      }
+    }
+    return { front, back };
+  },
+};
+function applyPreset(p) {
+  const out = PRESETS[p]();
+  for (const k in out) {
+    state.zones[k].items = out[k];
+    if (out[k].length) redrawZone(k);
+  }
+  // 未涉及的区域重绘（可能被旧选择影响）
+  redrawAllZones();
+  select(null);
+  scheduleSave();
+  const names = { A: '前胸荣誉墙', B: '背面环绕', C: '前小后大', D: '斜向色带' };
+  toast(`已应用预设 ${p} · ${names[p]}，可继续手动微调`);
+}
+document.querySelectorAll('[data-preset]').forEach(b =>
+  b.addEventListener('click', () => applyPreset(b.dataset.preset)));
+
+/* 视角按钮 & 自动旋转 */
+document.querySelectorAll('#viewBtns [data-view]').forEach(b =>
+  b.addEventListener('click', () => {
+    const v = VIEW_PRESETS[b.dataset.view];
+    orbit.tAz = v.az; orbit.tPol = v.pol; orbit.tRadius = 3.7;
+  }));
+let autoRotate = $('#autoRot').checked;
+$('#autoRot').addEventListener('change', e => autoRotate = e.target.checked);
+
+/* ---------- 导出 PNG ---------- */
+function exportView(az) {
+  exporting = true;
+  if (selected) redrawZone(selected.zone);
+  const cw = container.clientWidth, ch = container.clientHeight;
+  const pr = renderer.getPixelRatio();
+  renderer.setPixelRatio(1);
+  renderer.setSize(1400, 1750, false);
+  camera.aspect = 1400 / 1750;
+  camera.updateProjectionMatrix();
+  const saved = { ...orbit };
+  orbit.az = orbit.tAz = az; orbit.pol = orbit.tPol = 1.30; orbit.radius = orbit.tRadius = 3.7;
+  updateCamera();
+  renderer.render(scene, camera);
+  const url = renderer.domElement.toDataURL('image/png');
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `hoodie-${az === 0 ? 'front' : az === Math.PI ? 'back' : az > 0 ? 'right' : 'left'}.png`;
+  a.click();
+  Object.assign(orbit, saved);
+  renderer.setPixelRatio(pr);
+  renderer.setSize(cw, ch, false);
+  camera.aspect = cw / ch;
+  camera.updateProjectionMatrix();
+  exporting = false;
+  if (selected) redrawZone(selected.zone);
+  toast('已导出高清 PNG（1400×1750）');
+}
+$('#btnExpF').addEventListener('click', () => exportView(0));
+$('#btnExpB').addEventListener('click', () => exportView(Math.PI));
+$('#btnExpL').addEventListener('click', () => exportView(-Math.PI / 2));
+$('#btnExpR').addEventListener('click', () => exportView(Math.PI / 2));
+
+/* =========================================================
+   存档 / 读档（localStorage 自动保存）
+========================================================= */
+const SAVE_KEY = 'hoodie-cs-designer-v1';
+let saveTimer = null;
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 350);
+}
+function save() {
+  try {
+    const up = {};
+    for (const k in uploads) up[k] = uploads[k].data;
+    localStorage.setItem(SAVE_KEY, JSON.stringify({
+      v: 1, color: state.color, zones: state.zones, uploads: up,
+    }));
+  } catch (e) {
+    if (e.name === 'QuotaExceededError') toast('本地存档空间不足（图片太大），设计仍可用但不会自动保存');
+  }
+}
+function load() {
+  let data = null;
+  try { data = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) { /* ignore */ }
+  if (data && data.v === 1) {
+    state.color = data.color || state.color;
+    for (const k in state.zones) {
+      state.zones[k].items = (data.zones?.[k]?.items || []).filter(it =>
+        it && (it.type === 'text' ? it.text : it.teamId));
+    }
+    const ups = data.uploads || {};
+    const ids = Object.keys(ups);
+    let pending = ids.length;
+    for (const id of ids) {
+      const img = new Image();
+      img.onload = () => { if (--pending === 0) afterLoad(); };
+      img.onerror = () => { if (--pending === 0) afterLoad(); };
+      img.src = ups[id];
+      uploads[id] = { data: ups[id], img };
+    }
+    if (!ids.length) afterLoad();
+    function afterLoad() {
+      setColor(state.color);
+      refreshThumbs();
+    }
+    return true;
+  }
+  return false;
+}
+
+/* =========================================================
+   Toast / 尺寸 / 主循环
+========================================================= */
+let toastTimer = null;
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+function resize() {
+  const w = container.clientWidth, h = container.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(container);
+resize();
+
+/* 初始化 */
+const hadSave = load();
+setColor(state.color);
+refreshThumbs();
+if (!hadSave) {
+  applyPreset('A');
+  state.zones.back.items = PRESETS.B().back;
+  redrawAllZones();
+  scheduleSave();
+}
+updateCamera();
+
+/* 调试口（供自动化测试检查场景） */
+window.__dbg = { scene, zoneMeshes, state, camera, orbit };
+
+let lastT = performance.now();
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = Math.min((now - lastT) / 1000, 0.1);
+  lastT = now;
+  if (autoRotate && !drag && !rotating && !pinch) orbit.tAz += dt * 0.35;
+  const k = 1 - Math.exp(-dt * 9);
+  orbit.az += (orbit.tAz - orbit.az) * k;
+  orbit.pol += (orbit.tPol - orbit.pol) * k;
+  orbit.radius += (orbit.tRadius - orbit.radius) * k;
+  updateCamera();
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
